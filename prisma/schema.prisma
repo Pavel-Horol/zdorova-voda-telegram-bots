@@ -1,7 +1,6 @@
 // This is your Prisma schema file,
 // learn more about it in the docs: https://pris.ly/d/prisma-schema
-
-// Get a free hosted Postgres database in seconds: `npx create-db`
+// Модель данных — SPEC.md §4. Расчёт цены — SPEC.md §5 (только в pricing.service).
 
 generator client {
   provider = "prisma-client"
@@ -10,5 +9,74 @@ generator client {
 
 datasource db {
   provider = "postgresql"
-  url      = env("DATABASE_URL")
+}
+
+/// Статусы заказа (SPEC §4 / §7).
+enum OrderStatus {
+  CREATED
+  ACCEPTED
+  DELIVERED
+  CANCELLED
+}
+
+/// Клиент бота. Идентифицируется по Telegram-аккаунту и телефону.
+model Client {
+  id         String   @id @default(uuid())
+  /// Telegram user id — bigint, не int32 (легко переваливает за 2^31).
+  telegramId BigInt   @unique
+  phone      String   @unique
+  name       String?
+  createdAt  DateTime @default(now())
+
+  addresses Address[]
+  orders    Order[]
+}
+
+/// Адрес доставки. На старте обычно один (isDefault), модель допускает несколько.
+model Address {
+  id        String   @id @default(uuid())
+  clientId  String
+  raw       String
+  comment   String?
+  isDefault Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  client Client  @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  orders Order[]
+
+  @@index([clientId])
+}
+
+/// Заказ. totalPrice фиксируется на момент оформления и не пересчитывается (SPEC §4).
+model Order {
+  id           String      @id @default(uuid())
+  clientId     String
+  addressId    String
+  bottles      Int
+  /// true → сумма считалась по стартовой сетке (залог + помпа), SPEC §3.2.
+  isFirstOrder Boolean
+  /// Зафиксированная сумма заказа в гривнах (целое, без копеек).
+  totalPrice   Int
+  status       OrderStatus @default(CREATED)
+  createdAt    DateTime    @default(now())
+  acceptedAt   DateTime?
+  deliveredAt  DateTime?
+
+  client  Client  @relation(fields: [clientId], references: [id])
+  address Address @relation(fields: [addressId], references: [id])
+
+  @@index([clientId])
+  @@index([status])
+}
+
+/// Настройки цен — синглтон (одна строка на всю систему).
+/// id всегда = 1; сид создаёт строку с дефолтами (SPEC §3, §4).
+model PriceSettings {
+  id               Int      @id @default(1)
+  price1           Int      @default(80)
+  price2           Int      @default(75)
+  price3plus       Int      @default(70)
+  depositPerBottle Int      @default(300)
+  pumpPrice        Int      @default(200)
+  updatedAt        DateTime @updatedAt
 }
