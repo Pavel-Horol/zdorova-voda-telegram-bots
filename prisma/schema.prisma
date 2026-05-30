@@ -3,8 +3,12 @@
 // Модель данных — SPEC.md §4. Расчёт цены — SPEC.md §5 (только в pricing.service).
 
 generator client {
-  provider = "prisma-client"
-  output   = "../generated/prisma"
+  provider     = "prisma-client"
+  output       = "../generated/prisma"
+  // Проект компилируется в CommonJS (tsconfig module=nodenext, без "type":"module").
+  // Без этого новый генератор Prisma 7 выдаёт ESM-исходники с import.meta.url,
+  // которые ломаются в рантайме под Node ("exports is not defined in ES module scope").
+  moduleFormat = "cjs"
 }
 
 datasource db {
