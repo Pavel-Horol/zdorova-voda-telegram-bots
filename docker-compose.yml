@@ -4,6 +4,7 @@ services:
     env_file: .env
     environment:
       DATABASE_URL: postgresql://aqua:aqua@db:5432/aqua?schema=public
+      NODE_ENV: production
     ports:
       - "3000:3000"
     volumes:

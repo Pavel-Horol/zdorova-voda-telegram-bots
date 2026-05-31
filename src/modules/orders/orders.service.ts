@@ -8,7 +8,10 @@ import {
   type OrderDispatcher,
 } from '../../bots/shared/order-dispatcher';
 import { OrderStatus } from '../../../generated/prisma/enums';
-import type { Order } from '../../../generated/prisma/client';
+import type { Order, Client, Address } from '../../../generated/prisma/client';
+
+/** Заказ вместе со связанными клиентом и адресом (для рендера у диспетчера). */
+export type OrderWithRelations = Order & { client: Client; address: Address };
 
 /**
  * Превью суммы заказа ДО его создания (SPEC §6: экраны CONFIRM_*).
@@ -43,6 +46,32 @@ export class OrdersService {
 
   getById(id: string): Promise<Order | null> {
     return this.prisma.order.findUnique({ where: { id } });
+  }
+
+  /** Заказ с клиентом и адресом — для перерисовки сообщения у диспетчера (SPEC §7). */
+  getOrderView(id: string): Promise<OrderWithRelations | null> {
+    return this.prisma.order.findUnique({
+      where: { id },
+      include: { client: true, address: true },
+    });
+  }
+
+  /**
+   * Минимальная сводка за сегодня для /stats (SPEC §7): число заказов и сумма,
+   * без отменённых. Полноценная статистика — отдельный модуль позже.
+   */
+  async statsToday(): Promise<{ count: number; sum: number }> {
+    const since = new Date();
+    since.setHours(0, 0, 0, 0);
+    const where = {
+      createdAt: { gte: since },
+      status: { not: OrderStatus.CANCELLED },
+    };
+    const [count, agg] = await this.prisma.$transaction([
+      this.prisma.order.count({ where }),
+      this.prisma.order.aggregate({ where, _sum: { totalPrice: true } }),
+    ]);
+    return { count, sum: agg._sum.totalPrice ?? 0 };
   }
 
   /**

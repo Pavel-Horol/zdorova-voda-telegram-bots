@@ -6,11 +6,17 @@ import { PricingSettingsModule } from '../pricing-settings/pricing-settings.modu
 import {
   ORDER_DISPATCHER,
   LogOrderDispatcher,
-  TelegramOrderDispatcher,
 } from '../../bots/shared/order-dispatcher';
+import { TelegramOrderDispatcher } from '../../bots/dispatcher-bot/telegram-order-dispatcher';
+import { DispatcherBotCoreModule } from '../../bots/dispatcher-bot/dispatcher-bot-core.module';
 
 @Module({
-  imports: [ClientsModule, PricingModule, PricingSettingsModule],
+  imports: [
+    ClientsModule,
+    PricingModule,
+    PricingSettingsModule,
+    DispatcherBotCoreModule,
+  ],
   providers: [
     OrdersService,
     {

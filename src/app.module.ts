@@ -6,6 +6,7 @@ import { PricingSettingsModule } from './modules/pricing-settings/pricing-settin
 import { ClientsModule } from './modules/clients/clients.module';
 import { OrdersModule } from './modules/orders/orders.module';
 import { ClientBotModule } from './bots/client-bot/client-bot.module';
+import { DispatcherBotModule } from './bots/dispatcher-bot/dispatcher-bot.module';
 
 @Module({
   imports: [
@@ -16,6 +17,7 @@ import { ClientBotModule } from './bots/client-bot/client-bot.module';
     ClientsModule,
     OrdersModule,
     ClientBotModule,
+    DispatcherBotModule,
   ],
 })
 export class AppModule {}
