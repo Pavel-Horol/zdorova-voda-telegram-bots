@@ -11,6 +11,22 @@ import { OrderStatus } from '../../../generated/prisma/enums';
 import type { Order } from '../../../generated/prisma/client';
 
 /**
+ * Превью суммы заказа ДО его создания (SPEC §6: экраны CONFIRM_*).
+ * Бот рендерит подтверждение по этим данным и сам деньги НЕ считает (CLAUDE.md §1).
+ */
+export interface OrderQuote {
+  isFirstOrder: boolean;
+  bottles: number;
+  totalPrice: number;
+  /** Цена за бутыль — только для повторного заказа (для текста «N × цена»). */
+  perBottle: number | null;
+  /** Залог за бутыль — для текста первого заказа. */
+  depositPerBottle: number;
+  /** Цена помпы — для текста первого заказа. */
+  pumpPrice: number;
+}
+
+/**
  * Заказы: создание, расчёт суммы (делегирует), смена статусов (SPEC §5, §7, §8).
  * Сервис соединяет clients + pricing-settings + pricing, но сам сумму НЕ считает —
  * это делает PricingService (единственный источник правды, CLAUDE.md §1).
@@ -67,6 +83,30 @@ export class OrdersService {
     await this.dispatcher.notifyNewOrder(order, client, address);
 
     return order;
+  }
+
+  /**
+   * Считает превью суммы для экрана подтверждения (SPEC §6), не создавая заказ.
+   * Использует те же pricing/pricing-settings, что и createOrder — единый
+   * источник правды по сумме (CLAUDE.md §1). perBottle выводится из totalPrice,
+   * чтобы не дублировать выбор ценовой ветки из PricingService.
+   */
+  async quote(clientId: string, bottles: number): Promise<OrderQuote> {
+    const isFirstOrder = await this.isFirstOrder(clientId);
+    const prices = await this.pricingSettings.getCurrent();
+    const totalPrice = this.pricing.calculateTotal(
+      bottles,
+      isFirstOrder,
+      prices,
+    );
+    return {
+      isFirstOrder,
+      bottles,
+      totalPrice,
+      perBottle: isFirstOrder ? null : totalPrice / bottles,
+      depositPerBottle: prices.depositPerBottle,
+      pumpPrice: prices.pumpPrice,
+    };
   }
 
   /** CREATED → ACCEPTED (SPEC §7). */

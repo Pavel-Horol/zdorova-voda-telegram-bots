@@ -148,7 +148,8 @@ describe('OrdersService', () => {
 
       expect(prisma.order.update).toHaveBeenCalledWith(
         expect.objectContaining({
-          where: { id: 'o1' },
+          // where включает status: from — атомарный гард перехода (см. transition).
+          where: { id: 'o1', status: 'CREATED' },
           data: expect.objectContaining({ status: 'ACCEPTED' }),
         }),
       );
