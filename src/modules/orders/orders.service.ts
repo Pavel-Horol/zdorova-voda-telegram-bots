@@ -64,7 +64,7 @@ export class OrdersService {
       },
     });
 
-    await this.dispatcher.dispatch(order);
+    await this.dispatcher.notifyNewOrder(order, client, address);
 
     return order;
   }
@@ -123,7 +123,7 @@ export class OrdersService {
       );
     }
     return this.prisma.order.update({
-      where: { id },
+      where: { id, status: from },
       data: { status: to, ...extra },
     });
   }

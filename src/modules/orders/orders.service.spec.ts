@@ -48,7 +48,7 @@ describe('OrdersService', () => {
   };
   let clients: { getById: jest.Mock; getDefaultAddress: jest.Mock };
   let pricingSettings: { getCurrent: jest.Mock };
-  let dispatcher: { dispatch: jest.Mock };
+  let dispatcher: { notifyNewOrder: jest.Mock };
 
   beforeEach(() => {
     prisma = {
@@ -65,19 +65,19 @@ describe('OrdersService', () => {
       getDefaultAddress: jest.fn().mockResolvedValue(address),
     };
     pricingSettings = { getCurrent: jest.fn().mockResolvedValue(prices) };
-    dispatcher = { dispatch: jest.fn().mockResolvedValue(undefined) };
+    dispatcher = { notifyNewOrder: jest.fn().mockResolvedValue(undefined) };
 
     service = new OrdersService(
       prisma as unknown as PrismaService,
       clients as unknown as ClientsService,
       new PricingService(),
       pricingSettings as unknown as PricingSettingsService,
-      // mock структурно совместим с OrderDispatcher (один метод dispatch).
+      // mock структурно совместим с OrderDispatcher (один метод notifyNewOrder).
       dispatcher,
     );
   });
 
-  // Проверки идут через типизированные моки prisma.order.* / dispatcher.dispatch:
+  // Проверки идут через типизированные моки prisma.order.* / dispatcher.notifyNewOrder:
   // возвращаемый сервисом Order приходит из сгенерированного клиента и в контексте
   // юнит-теста выводится как any, поэтому assertions строим на аргументах вызовов.
   describe('createOrder', () => {
@@ -101,7 +101,11 @@ describe('OrdersService', () => {
           status: 'CREATED',
         },
       });
-      expect(dispatcher.dispatch).toHaveBeenCalledWith(created);
+      expect(dispatcher.notifyNewOrder).toHaveBeenCalledWith(
+        created,
+        client,
+        address,
+      );
     });
 
     it('повторный заказ: isFirstOrder=false, сумма по обычной сетке (2 бутыли → 150)', async () => {
