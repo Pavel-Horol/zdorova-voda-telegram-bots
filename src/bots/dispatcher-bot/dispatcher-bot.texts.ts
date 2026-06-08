@@ -28,11 +28,11 @@ export function priceFieldLabel(field: EditablePriceField): string {
 }
 
 /**
- * Строка заказа в привычном диспетчеру формате — её удобно копировать в Viber
+ * Строка заказа в привычном диспетчеру формате — её удобно переслать водителю
  * (SPEC §7). Повторный: «2по75 Адрес», первый: «2бут [ПЕРВЫЙ +помпа] Адрес».
  * Коммент — в скобках, как в примере спеки.
  */
-function viberLine(order: Order, address: Address): string {
+function driverLine(order: Order, address: Address): string {
   const qty = order.isFirstOrder
     ? `${order.bottles}бут [ПЕРВЫЙ +помпа]`
     : `${order.bottles}по${order.totalPrice / order.bottles}`;
@@ -51,7 +51,7 @@ export function orderMessage(
   const name = client.name ?? 'без имени';
   return (
     `${header} #${order.id.slice(0, 8)}${firstMark}\n` +
-    `${viberLine(order, address)}\n` +
+    `${driverLine(order, address)}\n` +
     `Клиент: ${name} (${client.phone})\n` +
     `Сумма: ${order.totalPrice} грн`
   );

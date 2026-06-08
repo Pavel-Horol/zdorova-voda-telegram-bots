@@ -44,10 +44,6 @@ export class OrdersService {
     @Inject(ORDER_DISPATCHER) private readonly dispatcher: OrderDispatcher,
   ) {}
 
-  getById(id: string): Promise<Order | null> {
-    return this.prisma.order.findUnique({ where: { id } });
-  }
-
   /**
    * Последние заказы клиента для экрана «Мои заказы» (SPEC §6). Read-only,
    * новейшие сверху, отменённые включаются (клиент видит и их статус).

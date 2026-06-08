@@ -44,13 +44,6 @@ export class ClientsService {
     });
   }
 
-  listAddresses(clientId: string): Promise<Address[]> {
-    return this.prisma.address.findMany({
-      where: { clientId },
-      orderBy: { createdAt: 'asc' },
-    });
-  }
-
   getDefaultAddress(clientId: string): Promise<Address | null> {
     return this.prisma.address.findFirst({
       where: { clientId, isDefault: true },

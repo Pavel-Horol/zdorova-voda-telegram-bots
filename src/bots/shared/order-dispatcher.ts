@@ -10,7 +10,7 @@ export const ORDER_DISPATCHER = Symbol('ORDER_DISPATCHER');
 /**
  * Абстракция «куда уходит готовый заказ» (CLAUDE.md §2, SPEC §10).
  * Бизнес-логика заказа НЕ знает, кто получает уведомление: сейчас это
- * диспетчерский бот, в v2 — ViberDispatcher, без правок в orders.
+ * диспетчерский бот, в v2 — другой канал/реализация, без правок в orders.
  *
  * order/client/address передаются готовыми: OrdersService уже загрузил их при
  * оформлении, поэтому dispatcher НЕ ходит в БД сам (CLAUDE.md §6).

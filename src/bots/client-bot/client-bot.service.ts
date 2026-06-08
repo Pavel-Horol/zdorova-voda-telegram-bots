@@ -49,7 +49,6 @@ interface SessionData {
 type BotContext = Context & SessionFlavor<SessionData>;
 
 // Идентификаторы callback-кнопок.
-const CB_ORDER = 'order';
 const CB_CONFIRM_YES = 'confirm:yes';
 const CB_BACK = 'nav:back';
 const CB_CANCEL = 'nav:cancel';
@@ -151,8 +150,6 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
   private registerHandlers(bot: Bot<BotContext>): void {
     bot.command('start', (ctx) => this.onStart(ctx));
     bot.on('message:contact', (ctx) => this.onContact(ctx));
-    // CB_ORDER оставлен для совместимости со старыми inline-кнопками в чате.
-    bot.callbackQuery(CB_ORDER, (ctx) => this.onOrderCallback(ctx));
     bot.callbackQuery(/^qty:([1-9]\d*)$/, (ctx) => this.onChooseQty(ctx));
     bot.callbackQuery(CB_CONFIRM_YES, (ctx) => this.onConfirmYes(ctx));
     bot.callbackQuery(CB_BACK, (ctx) => this.onBack(ctx));
@@ -233,12 +230,6 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
     if (!address) return;
     this.pushHistory(ctx, Step.AwaitAddress);
     await this.renderChooseQty(ctx);
-  }
-
-  /** Старый inline-callback «Заказать воду» — мост в общий startOrder. */
-  private async onOrderCallback(ctx: BotContext): Promise<void> {
-    await ctx.answerCallbackQuery();
-    await this.startOrder(ctx);
   }
 
   /**
