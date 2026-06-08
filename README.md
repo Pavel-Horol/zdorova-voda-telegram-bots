@@ -1,98 +1,228 @@
-<p align="center">
-  <a href="http://nestjs.com/" target="blank"><img src="https://nestjs.com/img/logo-small.svg" width="120" alt="Nest Logo" /></a>
-</p>
+# 💧 Aqua Bot — бот приёма заказов воды
 
-[circleci-image]: https://img.shields.io/circleci/build/github/nestjs/nest/master?token=abc123def456
-[circleci-url]: https://circleci.com/gh/nestjs/nest
+Telegram-бот для приёма заказов бутилированной воды (бутыли 19 л). Два бота в одном
+NestJS-процессе и одна БД: **клиентский** (оформляет заказы) и **диспетчерский**
+(принимает заказы, ведёт статусы, правит цены).
 
-  <p align="center">A progressive <a href="http://nodejs.org" target="_blank">Node.js</a> framework for building efficient and scalable server-side applications.</p>
-    <p align="center">
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/v/@nestjs/core.svg" alt="NPM Version" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/l/@nestjs/core.svg" alt="Package License" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/dm/@nestjs/common.svg" alt="NPM Downloads" /></a>
-<a href="https://circleci.com/gh/nestjs/nest" target="_blank"><img src="https://img.shields.io/circleci/build/github/nestjs/nest/master" alt="CircleCI" /></a>
-<a href="https://discord.gg/G7Qnnhy" target="_blank"><img src="https://img.shields.io/badge/discord-online-brightgreen.svg" alt="Discord"/></a>
-<a href="https://opencollective.com/nest#backer" target="_blank"><img src="https://opencollective.com/nest/backers/badge.svg" alt="Backers on Open Collective" /></a>
-<a href="https://opencollective.com/nest#sponsor" target="_blank"><img src="https://opencollective.com/nest/sponsors/badge.svg" alt="Sponsors on Open Collective" /></a>
-  <a href="https://paypal.me/kamilmysliwiec" target="_blank"><img src="https://img.shields.io/badge/Donate-PayPal-ff3f59.svg" alt="Donate us"/></a>
-    <a href="https://opencollective.com/nest#sponsor"  target="_blank"><img src="https://img.shields.io/badge/Support%20us-Open%20Collective-41B883.svg" alt="Support us"></a>
-  <a href="https://twitter.com/nestframework" target="_blank"><img src="https://img.shields.io/twitter/follow/nestframework.svg?style=social&label=Follow" alt="Follow us on Twitter"></a>
-</p>
-  <!--[![Backers on Open Collective](https://opencollective.com/nest/backers/badge.svg)](https://opencollective.com/nest#backer)
-  [![Sponsors on Open Collective](https://opencollective.com/nest/sponsors/badge.svg)](https://opencollective.com/nest#sponsor)-->
+Продуктовая логика — в [`SPEC.md`](./SPEC.md). Правила разработки — в [`CLAUDE.md`](./CLAUDE.md).
+Этот файл — обзор того, **что уже умеет приложение**: функции, кнопки и сквозные сценарии.
 
-## Description
+---
 
-[Nest](https://github.com/nestjs/nest) framework TypeScript starter repository.
+## Стек
 
-## Project setup
+- **Node.js + TypeScript** (strict), **NestJS**
+- **PostgreSQL + Prisma 7** (`@prisma/adapter-pg`)
+- **grammY** — два инстанса Telegram-бота (long polling), состояние диалога в in-memory сессии
+- Без Redis в MVP
 
-```bash
-$ npm install
+---
+
+## Архитектура (кратко)
+
+```
+src/
+  modules/
+    clients/            # клиенты + адреса (CRUD, default-адрес)
+    orders/             # заказы: создание, статусы, превью суммы, /stats
+    pricing/            # ЕДИНСТВЕННОЕ место расчёта суммы (calculateTotal)
+    pricing-settings/   # чтение/редактирование цен (синглтон в БД)
+  bots/
+    client-bot/         # grammY-инстанс №1: диалог клиента (FSM)
+    dispatcher-bot/     # grammY-инстанс №2: уведомления + управление заказами
+    shared/
+      order-dispatcher.ts   # абстракция «куда уходит готовый заказ»
+                            #  → TelegramOrderDispatcher (прод) / LogOrderDispatcher (dev)
+  prisma/               # тонкая обёртка над PrismaClient
 ```
 
-## Compile and run the project
+Ключевые правила: расчёт суммы — только в `pricing.service`; `totalPrice` фиксируется
+в заказе на момент оформления; доступ к БД — только из сервисов модулей (боты ходят
+через сервисы); доставка заказа диспетчеру скрыта за интерфейсом `OrderDispatcher`
+(заготовка под будущий прямой Viber).
 
-```bash
-# development
-$ npm run start
+---
 
-# watch mode
-$ npm run start:dev
+## Модель данных
 
-# production mode
-$ npm run start:prod
+| Сущность | Назначение |
+|----------|-----------|
+| **Client** | клиент: `telegramId` (uniq), `phone` (uniq), `name` |
+| **Address** | адрес доставки: `raw`, `comment?`, `isDefault` |
+| **Order** | заказ: `bottles`, `isFirstOrder`, `totalPrice` (фикс.), `status`, таймстемпы |
+| **PriceSettings** | синглтон цен (id=1): `price1/price2/price3plus/depositPerBottle/pumpPrice` |
+
+Статусы заказа: `CREATED → ACCEPTED → DELIVERED`, плюс `CANCELLED` (из CREATED/ACCEPTED).
+
+---
+
+## Ценообразование
+
+**Повторный заказ** (у клиента уже есть не-отменённые заказы):
+
+| Количество | Цена за бутыль (дефолт) |
+|-----------|--------------------------|
+| 1 | 80 грн |
+| 2 | 75 грн |
+| 3+ | 70 грн |
+
+**Первый заказ** (нет ни одного не-отменённого заказа): `кол-во × залог(300) + помпа(200)`,
+вода бесплатно. Пример: 1 бутыль → 500 грн, 2 → 800 грн.
+
+Все суммы редактируются диспетчером и хранятся в БД. `isFirstOrder` определяется по
+наличию у клиента заказов со статусом, отличным от `CANCELLED`.
+
+---
+
+## 🤖 Клиентский бот — функционал и кнопки
+
+### Постоянное reply-меню (всегда внизу экрана)
+
+| Кнопка | Что делает |
+|--------|-----------|
+| 🚰 **Заказать воду** | старт сценария заказа |
+| 📋 **Мои заказы** | последние 5 заказов: дата, кол-во, сумма, статус |
+| 💰 **Цены** | текущая сетка цен + стартовый комплект |
+| 📞 **Связаться** | телефон поддержки (`SUPPORT_PHONE`) |
+
+Нажатие любой reply-кнопки в любой момент — **глобальная навигация**: отменяет
+активный сценарий заказа и переводит на нужный экран.
+
+### Inline-кнопки внутри сценария заказа
+
+- **Запрос контакта:** `📱 Поделиться номером` (request_contact). Принимается только
+  собственный контакт пользователя.
+- **Выбор количества:** кнопки `1` `2` `3` `4` `5` + ряд навигации `◀ Назад` `❌ Отмена`.
+- **Подтверждение:** `✅ Всё верно, заказываю` · `✏️ Изменить` (= шаг назад) · `❌ Отмена`.
+- **Ввод адреса (первый заказ):** под приглашением только `❌ Отмена`; адрес вводится текстом.
+
+### FSM клиента
+
+```
+/start
+  ├─ контакт неизвестен → AWAIT_CONTACT (кнопка «Поделиться номером»)
+  └─ контакт известен  → MAIN_MENU
+
+MAIN_MENU
+  ├─ «Заказать воду»
+  │     ├─ нет адреса (первый заказ): AWAIT_ADDRESS → CHOOSE_QTY → CONFIRM
+  │     └─ есть адрес (повторный):    CHOOSE_QTY → CONFIRM
+  │     └─ CONFIRM → подтвердил → Order(CREATED) → уведомление диспетчеру → «Заказ принят ✅»
+  ├─ «Мои заказы» → история (5 последних)
+  ├─ «Цены»       → сетка из PriceSettings
+  └─ «Связаться»  → SUPPORT_PHONE
 ```
 
-## Run tests
+Защита от двойного тапа: шаг уводится из `CONFIRM` до создания заказа — повторное
+нажатие дубль не создаёт.
 
-```bash
-# unit tests
-$ npm run test
+---
 
-# e2e tests
-$ npm run test:e2e
+## 🛠 Диспетчерский бот — функционал и кнопки
 
-# test coverage
-$ npm run test:cov
+Работает только в чате `DISPATCHER_CHAT_ID` (chat-guard). Апдейты из других чатов игнорируются.
+
+### Уведомление о новом заказе (приходит автоматически)
+
+```
+🔔 НОВЫЙ ЗАКАЗ #1a2b3c4d  [ПЕРВЫЙ ЗАКАЗ ⚠️]
+2по75 Хмельницкого 2, кв.5 (домофон 45)
+Клиент: Иван (+380...)
+Сумма: 150 грн
 ```
 
-## Deployment
+Под сообщением — кнопки по статусу:
 
-When you're ready to deploy your NestJS application to production, there are some key steps you can take to ensure it runs as efficiently as possible. Check out the [deployment documentation](https://docs.nestjs.com/deployment) for more information.
+| Статус | Кнопки |
+|--------|--------|
+| `CREATED` | `✅ Принят` · `❌ Отменить` |
+| `ACCEPTED` | `🚚 Доставлен` · `❌ Отменить` |
+| `DELIVERED` / `CANCELLED` | (терминальный, кнопок нет) |
 
-If you are looking for a cloud-based platform to deploy your NestJS application, check out [Mau](https://mau.nestjs.com), our official platform for deploying NestJS applications on AWS. Mau makes deployment straightforward and fast, requiring just a few simple steps:
+После нажатия сообщение перерисовывается под новый статус. Невалидный переход
+(двойной тап) — мягкий тост «Уже обработано или недоступно».
 
-```bash
-$ npm install -g @nestjs/mau
-$ mau deploy
+Строка в формате для копирования в Viber формируется автоматически:
+повторный — `2по75 Адрес`, первый — `2бут [ПЕРВЫЙ +помпа] Адрес`.
+
+### Команды
+
+| Команда | Действие |
+|---------|----------|
+| `/prices` | показывает текущие цены + кнопки `Цена 1` `Цена 2` `Цена 3+` `Залог` `Помпа`. Выбрал поле → ввёл число → сохранено в БД |
+| `/stats` | сводка за сегодня: число заказов и сумма (без отменённых) |
+
+---
+
+## 🔄 Сквозной сценарий (E2E happy path)
+
+1. **Клиент** в клиентском боте: `/start` → делится контактом → `🚰 Заказать воду`.
+2. Первый заказ — вводит адрес; повторный — адрес уже есть.
+3. Выбирает количество кнопками → видит итог с суммой → `✅ Всё верно, заказываю`.
+4. Создаётся `Order(status=CREATED)`, клиент получает «Заказ принят ✅».
+5. **Диспетчер** получает уведомление с кнопками → жмёт `✅ Принят` (`ACCEPTED`),
+   вручную копирует строку заказа в Viber-личку водителя.
+6. Водитель доставил → диспетчер жмёт `🚚 Доставлен` (`DELIVERED`). Деньги взял
+   водитель на месте.
+
+Любой из участников может отменить заказ кнопкой `❌` (пока он не доставлен).
+
+---
+
+## Соответствие SPEC
+
+**Реализовано полностью:** §3 ценообразование, §4 модель данных, §5 единый расчёт
+суммы, §6 FSM клиента (меню, контакт, адрес, выбор количества, подтверждение,
+история, цены, контакты, Назад/Отмена), §7 FSM диспетчера (уведомления, статусы,
+`/prices`, `/stats`), §8 сквозной путь, §9 ключевые edge-кейсы (чужой контакт,
+идемпотентность подтверждения, запрет невалидных переходов), §2/§10 абстракция
+`OrderDispatcher`.
+
+**Реализовано частично / не реализовано:**
+
+- **Кнопка «Повторить прошлый заказ»** (SPEC §6) — пока нет; повторный заказ
+  оформляется обычным путём с переиспользованием default-адреса.
+- **Сбор `comment` к адресу через бота** — клиент вводит только `raw`; поле `comment`
+  поддержано в модели и текстах, но отдельный шаг ввода не реализован.
+- **`/stats`** — только за сегодня (count + сумма). Срез «за неделю» и «через бота
+  vs всего» из SPEC §7 не реализован.
+- **Напоминания «давно не заказывали»** (SPEC §6/§10, помечено как опциональное) — нет.
+
+---
+
+## Запуск
+
+### Переменные окружения (`.env`, см. `.env.example`)
+
+```
+DATABASE_URL=postgresql://aqua:aqua@localhost:5432/aqua?schema=public
+CLIENT_BOT_TOKEN=...
+DISPATCHER_BOT_TOKEN=...
+DISPATCHER_CHAT_ID=...        # куда слать уведомления о заказах
+SUPPORT_PHONE=+380XXXXXXXXX   # заглушка, заменить перед запуском
 ```
 
-With Mau, you can deploy your application in just a few clicks, allowing you to focus on building features rather than managing infrastructure.
+> Если токены не заданы — соответствующий бот просто не поднимается (полезно для dev).
 
-## Resources
+### Команды
 
-Check out a few resources that may come in handy when working with NestJS:
+```bash
+npm install
 
-- Visit the [NestJS Documentation](https://docs.nestjs.com) to learn more about the framework.
-- For questions and support, please visit our [Discord channel](https://discord.gg/G7Qnnhy).
-- To dive deeper and get more hands-on experience, check out our official video [courses](https://courses.nestjs.com/).
-- Deploy your application to AWS with the help of [NestJS Mau](https://mau.nestjs.com) in just a few clicks.
-- Visualize your application graph and interact with the NestJS application in real-time using [NestJS Devtools](https://devtools.nestjs.com).
-- Need help with your project (part-time to full-time)? Check out our official [enterprise support](https://enterprise.nestjs.com).
-- To stay in the loop and get updates, follow us on [X](https://x.com/nestframework) and [LinkedIn](https://linkedin.com/company/nestjs).
-- Looking for a job, or have a job to offer? Check out our official [Jobs board](https://jobs.nestjs.com).
+# БД (локально через docker-compose)
+docker compose up -d db
+npx prisma migrate dev        # применить миграции
+npx prisma generate           # сгенерить клиент
+npm run db:seed               # засеять PriceSettings дефолтами
+npx prisma studio             # посмотреть данные
 
-## Support
+# запуск
+npm run start:dev             # dev с hot-reload
+npm run start:prod            # прод (после npm run build)
 
-Nest is an MIT-licensed open source project. It can grow thanks to the sponsors and support by the amazing backers. If you'd like to join them, please [read more here](https://docs.nestjs.com/support).
+# тесты / линт
+npm run test
+npm run lint
+```
 
-## Stay in touch
-
-- Author - [Kamil Myśliwiec](https://twitter.com/kammysliwiec)
-- Website - [https://nestjs.com](https://nestjs.com/)
-- Twitter - [@nestframework](https://twitter.com/nestframework)
-
-## License
-
-Nest is [MIT licensed](https://github.com/nestjs/nest/blob/master/LICENSE).
+Юнит-тестами покрыты `pricing`, `pricing-settings`, `clients`, `orders`.

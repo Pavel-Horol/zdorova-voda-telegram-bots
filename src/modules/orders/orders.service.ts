@@ -48,6 +48,18 @@ export class OrdersService {
     return this.prisma.order.findUnique({ where: { id } });
   }
 
+  /**
+   * Последние заказы клиента для экрана «Мои заказы» (SPEC §6). Read-only,
+   * новейшие сверху, отменённые включаются (клиент видит и их статус).
+   */
+  listByClient(clientId: string, limit = 5): Promise<Order[]> {
+    return this.prisma.order.findMany({
+      where: { clientId },
+      orderBy: { createdAt: 'desc' },
+      take: limit,
+    });
+  }
+
   /** Заказ с клиентом и адресом — для перерисовки сообщения у диспетчера (SPEC §7). */
   getOrderView(id: string): Promise<OrderWithRelations | null> {
     return this.prisma.order.findUnique({
