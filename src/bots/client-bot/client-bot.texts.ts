@@ -87,6 +87,23 @@ export const texts = {
   /** ORDER_DONE (SPEC §6). */
   orderDone: 'Заказ принят ✅ Скоро с вами свяжутся / привезут воду. Спасибо!',
 
+  /**
+   * Уведомление клиенту о смене статуса заказа диспетчером (SPEC §8).
+   * Для CREATED возвращает null — это исходный статус, о нём не уведомляем.
+   */
+  orderStatusUpdate(order: Order): string | null {
+    switch (order.status) {
+      case OrderStatus.ACCEPTED:
+        return 'Ваш заказ принят ✅ Готовим к доставке.';
+      case OrderStatus.DELIVERED:
+        return 'Заказ доставлен 🚚 Спасибо, что выбрали нас!';
+      case OrderStatus.CANCELLED:
+        return 'Ваш заказ отменён. Если это ошибка — свяжитесь с нами.';
+      default:
+        return null;
+    }
+  },
+
   /** Сбой создания заказа — просим повторить (edge §9). */
   orderError:
     'Не удалось оформить заказ 😔 Попробуйте ещё раз или позвоните нам.',

@@ -1,3 +1,4 @@
+import type { EventEmitter2 } from '@nestjs/event-emitter';
 import type { PrismaService } from '../../prisma/prisma.service';
 import type { ClientsService } from '../clients/clients.service';
 import type { PricingSettingsService } from '../pricing-settings/pricing-settings.service';
@@ -53,6 +54,7 @@ describe('OrdersService', () => {
     notifyNewOrder: jest.Mock;
     notifyClientCancelled: jest.Mock;
   };
+  let events: { emit: jest.Mock };
 
   beforeEach(() => {
     prisma = {
@@ -74,14 +76,16 @@ describe('OrdersService', () => {
       notifyNewOrder: jest.fn().mockResolvedValue(undefined),
       notifyClientCancelled: jest.fn().mockResolvedValue(undefined),
     };
+    events = { emit: jest.fn() };
 
     service = new OrdersService(
       prisma as unknown as PrismaService,
       clients as unknown as ClientsService,
       new PricingService(),
       pricingSettings as unknown as PricingSettingsService,
-      // mock структурно совместим с OrderDispatcher (один метод notifyNewOrder).
+      // mock структурно совместим с OrderDispatcher (notifyNewOrder/notifyClientCancelled).
       dispatcher,
+      events as unknown as EventEmitter2,
     );
   });
 
@@ -184,6 +188,10 @@ describe('OrdersService', () => {
           data: expect.objectContaining({ status: 'ACCEPTED' }) as object,
         }),
       );
+      // диспетчерский переход эмитит событие — клиентский бот уведомит клиента.
+      expect(events.emit).toHaveBeenCalledWith('order.status.changed', {
+        order: { id: 'o1', status: 'ACCEPTED' },
+      });
     });
 
     it('markDelivered из CREATED (минуя ACCEPTED) бросает ошибку', async () => {
@@ -228,6 +236,8 @@ describe('OrdersService', () => {
         cancelled,
         client,
       );
+      // самоотмену клиенту НЕ пушим (он сам инициировал) — событие не эмитится.
+      expect(events.emit).not.toHaveBeenCalled();
     });
 
     it('чужой заказ отменить нельзя (не тот clientId)', async () => {

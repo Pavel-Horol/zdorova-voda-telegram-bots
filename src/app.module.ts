@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
+import { EventEmitterModule } from '@nestjs/event-emitter';
 import { PrismaModule } from './prisma/prisma.module';
 import { PricingModule } from './modules/pricing/pricing.module';
 import { PricingSettingsModule } from './modules/pricing-settings/pricing-settings.module';
@@ -11,6 +12,7 @@ import { DispatcherBotModule } from './bots/dispatcher-bot/dispatcher-bot.module
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
+    EventEmitterModule.forRoot(),
     PrismaModule,
     PricingModule,
     PricingSettingsModule,

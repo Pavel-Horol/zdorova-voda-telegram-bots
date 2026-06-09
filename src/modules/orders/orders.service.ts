@@ -1,4 +1,5 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { PrismaService } from '../../prisma/prisma.service';
 import { ClientsService } from '../clients/clients.service';
 import { PricingService } from '../pricing/pricing.service';
@@ -7,6 +8,10 @@ import {
   ORDER_DISPATCHER,
   type OrderDispatcher,
 } from '../../bots/shared/order-dispatcher';
+import {
+  ORDER_STATUS_CHANGED,
+  type OrderStatusChangedEvent,
+} from './order-events';
 import { OrderStatus } from '../../../generated/prisma/enums';
 import type { Order, Client, Address } from '../../../generated/prisma/client';
 
@@ -44,6 +49,7 @@ export class OrdersService {
     private readonly pricing: PricingService,
     private readonly pricingSettings: PricingSettingsService,
     @Inject(ORDER_DISPATCHER) private readonly dispatcher: OrderDispatcher,
+    private readonly events: EventEmitter2,
   ) {}
 
   /**
@@ -163,17 +169,27 @@ export class OrdersService {
   }
 
   /** CREATED → ACCEPTED (SPEC §7). */
-  acceptOrder(id: string): Promise<Order> {
-    return this.transition(id, OrderStatus.CREATED, OrderStatus.ACCEPTED, {
-      acceptedAt: new Date(),
-    });
+  async acceptOrder(id: string): Promise<Order> {
+    const order = await this.transition(
+      id,
+      OrderStatus.CREATED,
+      OrderStatus.ACCEPTED,
+      { acceptedAt: new Date() },
+    );
+    this.emitStatusChanged(order);
+    return order;
   }
 
   /** ACCEPTED → DELIVERED (SPEC §7, §8). */
-  markDelivered(id: string): Promise<Order> {
-    return this.transition(id, OrderStatus.ACCEPTED, OrderStatus.DELIVERED, {
-      deliveredAt: new Date(),
-    });
+  async markDelivered(id: string): Promise<Order> {
+    const order = await this.transition(
+      id,
+      OrderStatus.ACCEPTED,
+      OrderStatus.DELIVERED,
+      { deliveredAt: new Date() },
+    );
+    this.emitStatusChanged(order);
+    return order;
   }
 
   /** CREATED/ACCEPTED → CANCELLED. Доставленный или уже отменённый — нельзя. */
@@ -185,10 +201,22 @@ export class OrdersService {
     ) {
       throw new Error(`cannot cancel order ${id} in status ${order.status}`);
     }
-    return this.prisma.order.update({
+    const cancelled = await this.prisma.order.update({
       where: { id },
       data: { status: OrderStatus.CANCELLED },
     });
+    this.emitStatusChanged(cancelled);
+    return cancelled;
+  }
+
+  /**
+   * Оповещает подписчиков о смене статуса заказа диспетчером (клиентский бот
+   * уведомит клиента, SPEC §8). Только для диспетчерских переходов — отмену
+   * клиентом (cancelOwnOrder) сюда НЕ заводим.
+   */
+  private emitStatusChanged(order: Order): void {
+    const payload: OrderStatusChangedEvent = { order };
+    this.events.emit(ORDER_STATUS_CHANGED, payload);
   }
 
   /**

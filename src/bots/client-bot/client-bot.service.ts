@@ -13,9 +13,14 @@ import {
   type Context,
   type SessionFlavor,
 } from 'grammy';
+import { OnEvent } from '@nestjs/event-emitter';
 import { ClientsService } from '../../modules/clients/clients.service';
 import { OrdersService } from '../../modules/orders/orders.service';
 import { PricingSettingsService } from '../../modules/pricing-settings/pricing-settings.service';
+import {
+  ORDER_STATUS_CHANGED,
+  type OrderStatusChangedEvent,
+} from '../../modules/orders/order-events';
 import type { Address, Order } from '../../../generated/prisma/client';
 import { OrderStatus } from '../../../generated/prisma/enums';
 import { texts } from './client-bot.texts';
@@ -194,6 +199,30 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
 
   async onModuleDestroy(): Promise<void> {
     await this.bot?.stop();
+  }
+
+  /**
+   * Уведомляет клиента о смене статуса его заказа диспетчером (SPEC §8).
+   * Слушает событие из OrdersService. Сбой отправки (клиент заблокировал бота,
+   * удалил чат) логируем, но не пробрасываем — это не должно ронять переход
+   * статуса у диспетчера (CLAUDE.md прав. 9).
+   */
+  @OnEvent(ORDER_STATUS_CHANGED)
+  async onOrderStatusChanged(event: OrderStatusChangedEvent): Promise<void> {
+    if (!this.bot) return;
+    const text = texts.orderStatusUpdate(event.order);
+    if (!text) return;
+    // Слушатель работает fire-and-forget (emit не ждёт): любую ошибку (БД,
+    // заблокированный бот) гасим здесь, иначе будет unhandled rejection.
+    try {
+      const client = await this.clients.getById(event.order.clientId);
+      if (!client) return;
+      await this.bot.api.sendMessage(String(client.telegramId), text);
+    } catch (err) {
+      this.logger.warn(
+        `не удалось уведомить клиента по заказу ${event.order.id}: ${(err as Error).message}`,
+      );
+    }
   }
 
   private registerHandlers(bot: Bot<BotContext>): void {
