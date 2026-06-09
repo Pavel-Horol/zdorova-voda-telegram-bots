@@ -24,16 +24,7 @@ import {
 import type { Address, Order } from '../../../generated/prisma/client';
 import { OrderStatus } from '../../../generated/prisma/enums';
 import { texts } from './client-bot.texts';
-
-/** Шаги диалога клиента (SPEC §6). Хранятся в in-memory сессии grammY. */
-enum Step {
-  AwaitContact = 'AWAIT_CONTACT',
-  MainMenu = 'MAIN_MENU',
-  AwaitAddress = 'AWAIT_ADDRESS',
-  AwaitComment = 'AWAIT_COMMENT',
-  ChooseQty = 'CHOOSE_QTY',
-  Confirm = 'CONFIRM',
-}
+import { resolveBack, Step } from './client-bot.fsm';
 
 /** Шаги активного сценария заказа — на них действует «Назад»/«Отмена» (SPEC §6). */
 const ORDER_FLOW_STEPS: readonly Step[] = [
@@ -510,25 +501,25 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
     if (!client) return;
 
     const prev = ctx.session.history.pop();
-    if (!prev || prev === Step.MainMenu) {
-      await this.showMainMenu(ctx, client.name);
-      return;
+    // Адрес важен только для ветки выбора количества — грузим его лишь там.
+    const hasDefaultAddress =
+      prev === Step.ChooseQty
+        ? (await this.clients.getDefaultAddress(client.id)) !== null
+        : false;
+    switch (resolveBack(prev, hasDefaultAddress)) {
+      case 'main-menu':
+        await this.showMainMenu(ctx, client.name);
+        return;
+      case 'address-prompt':
+        await this.renderAddressPrompt(ctx);
+        return;
+      case 'comment-prompt':
+        await this.renderCommentPrompt(ctx);
+        return;
+      case 'choose-qty':
+        await this.renderChooseQty(ctx, client.id);
+        return;
     }
-    if (prev === Step.AwaitAddress) {
-      await this.renderAddressPrompt(ctx);
-      return;
-    }
-    if (prev === Step.AwaitComment) {
-      await this.renderCommentPrompt(ctx);
-      return;
-    }
-    // prev === ChooseQty: вернуться к выбору количества.
-    const address = await this.clients.getDefaultAddress(client.id);
-    if (!address) {
-      await this.renderAddressPrompt(ctx);
-      return;
-    }
-    await this.renderChooseQty(ctx, client.id);
   }
 
   /** «Отмена»: выход из сценария заказа в главное меню. */
