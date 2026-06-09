@@ -85,4 +85,28 @@ export class ClientsService {
 
     return address;
   }
+
+  /**
+   * Устанавливает default-адрес клиента: если он уже есть — обновляет ту же
+   * запись, иначе создаёт. Это держит у клиента ровно один default-адрес и не
+   * плодит дубли при повторном проходе шага адреса (возврат «Назад» в первом
+   * заказе). Возврат залога/история адресов в MVP не нужны (SPEC §10).
+   */
+  async setDefaultAddress(
+    clientId: string,
+    input: { raw: string; comment?: string | null },
+  ): Promise<Address> {
+    const existing = await this.getDefaultAddress(clientId);
+    if (existing) {
+      return this.prisma.address.update({
+        where: { id: existing.id },
+        data: { raw: input.raw, comment: input.comment ?? null },
+      });
+    }
+    return this.addAddress(clientId, {
+      raw: input.raw,
+      comment: input.comment ?? null,
+      isDefault: true,
+    });
+  }
 }

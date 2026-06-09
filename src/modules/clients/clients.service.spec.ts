@@ -13,6 +13,7 @@ describe('ClientsService', () => {
       findMany: jest.Mock;
       findFirst: jest.Mock;
       create: jest.Mock;
+      update: jest.Mock;
       updateMany: jest.Mock;
     };
     $transaction: jest.Mock;
@@ -25,6 +26,7 @@ describe('ClientsService', () => {
         findMany: jest.fn(),
         findFirst: jest.fn(),
         create: jest.fn(),
+        update: jest.fn(),
         updateMany: jest.fn(),
       },
       $transaction: jest.fn(),
@@ -76,6 +78,36 @@ describe('ClientsService', () => {
         data: { clientId: 'c1', raw: 'ул. 2', comment: null, isDefault: true },
       });
       expect(prisma.$transaction).toHaveBeenCalled();
+    });
+  });
+
+  describe('setDefaultAddress', () => {
+    it('обновляет существующий default-адрес (без создания дубля)', async () => {
+      prisma.address.findFirst.mockResolvedValue({ id: 'a1', isDefault: true });
+      prisma.address.update.mockResolvedValue({ id: 'a1', raw: 'ул. 9' });
+
+      await service.setDefaultAddress('c1', {
+        raw: 'ул. 9',
+        comment: 'этаж 3',
+      });
+
+      expect(prisma.address.update).toHaveBeenCalledWith({
+        where: { id: 'a1' },
+        data: { raw: 'ул. 9', comment: 'этаж 3' },
+      });
+      expect(prisma.address.create).not.toHaveBeenCalled();
+    });
+
+    it('создаёт default-адрес, если его ещё нет', async () => {
+      prisma.address.findFirst.mockResolvedValue(null);
+      prisma.$transaction.mockResolvedValue([{ count: 0 }, { id: 'a2' }]);
+
+      await service.setDefaultAddress('c1', { raw: 'ул. 1' });
+
+      expect(prisma.address.update).not.toHaveBeenCalled();
+      expect(prisma.address.create).toHaveBeenCalledWith({
+        data: { clientId: 'c1', raw: 'ул. 1', comment: null, isDefault: true },
+      });
     });
   });
 });

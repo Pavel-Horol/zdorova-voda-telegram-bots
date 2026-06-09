@@ -24,6 +24,7 @@ enum Step {
   AwaitContact = 'AWAIT_CONTACT',
   MainMenu = 'MAIN_MENU',
   AwaitAddress = 'AWAIT_ADDRESS',
+  AwaitComment = 'AWAIT_COMMENT',
   ChooseQty = 'CHOOSE_QTY',
   Confirm = 'CONFIRM',
 }
@@ -31,6 +32,7 @@ enum Step {
 /** Шаги активного сценария заказа — на них действует «Назад»/«Отмена» (SPEC §6). */
 const ORDER_FLOW_STEPS: readonly Step[] = [
   Step.AwaitAddress,
+  Step.AwaitComment,
   Step.ChooseQty,
   Step.Confirm,
 ];
@@ -40,10 +42,21 @@ interface SessionData {
   /** Выбранное количество бутылей, переносится из CHOOSE_QTY в CONFIRM. */
   bottles?: number;
   /**
+   * Адрес (raw), введённый на AWAIT_ADDRESS, до сбора комментария на
+   * AWAIT_COMMENT. Address создаётся одной записью только после шага комментария.
+   */
+  addressRaw?: string;
+  /**
    * Стек предыдущих шагов сценария заказа для кнопки «Назад» (SPEC §6).
    * Пушатся только inline-переходы внутри флоу; reply-кнопки стек обнуляют.
    */
   history: Step[];
+  /**
+   * message_id последнего отправленного inline-экрана сценария. При любом
+   * переходе с него снимаем клавиатуру, чтобы в чате не висели «мёртвые» кнопки
+   * (тап по ним и так заблокирован гардами по step, но визуально путает).
+   */
+  activeInlineMessageId?: number;
 }
 
 type BotContext = Context & SessionFlavor<SessionData>;
@@ -52,6 +65,7 @@ type BotContext = Context & SessionFlavor<SessionData>;
 const CB_CONFIRM_YES = 'confirm:yes';
 const CB_BACK = 'nav:back';
 const CB_CANCEL = 'nav:cancel';
+const CB_SKIP = 'nav:skip';
 
 // Подписи reply-кнопок главного меню (они же — ключи текстового роутера).
 const BTN_ORDER = '🚰 Заказать воду';
@@ -61,6 +75,13 @@ const BTN_CONTACTS = '📞 Связаться';
 
 /** Максимум бутылей кнопками (3+ всё равно идёт по одной цене, SPEC §3.1). */
 const MAX_QTY = 5;
+
+/**
+ * Верхняя граница объёма заказа. Кнопки дают максимум MAX_QTY (или повтор
+ * реального прошлого заказа), так что больше — это подделанный callback. Защита
+ * от абсурдных сумм; реальные большие заказы — звонком диспетчеру (SPEC §1).
+ */
+const MAX_ORDER_QTY = 100;
 
 const contactKeyboard = new Keyboard()
   .requestContact('📱 Поделиться номером')
@@ -78,18 +99,30 @@ const mainReplyKeyboard = new Keyboard()
   .resized()
   .persistent();
 
-/** Клавиатура выбора количества: ряд цифр + ряд навигации (SPEC §6). */
-const qtyKeyboard = ((): InlineKeyboard => {
+/**
+ * Клавиатура выбора количества (SPEC §6): опц. кнопка «Повторить прошлый заказ»,
+ * ряд цифр 1..MAX_QTY, ряд навигации. Кнопка повтора шлёт тот же `qty:N`, что и
+ * цифры, поэтому отдельного обработчика не нужно (N может быть и больше MAX_QTY).
+ */
+function buildQtyKeyboard(repeatN: number | null): InlineKeyboard {
   const kb = new InlineKeyboard();
+  if (repeatN) {
+    kb.text(texts.repeatButton(repeatN), `qty:${repeatN}`).row();
+  }
   for (let n = 1; n <= MAX_QTY; n += 1) {
     kb.text(String(n), `qty:${n}`);
   }
   kb.row().text('◀ Назад', CB_BACK).text('❌ Отмена', CB_CANCEL);
   return kb;
-})();
+}
 
 /** Под приглашением адреса — только «Отмена» (с первого шага «назад» = выход). */
 const addressKeyboard = new InlineKeyboard().text('❌ Отмена', CB_CANCEL);
+
+/** Под приглашением комментария к адресу: пропустить (комментарий не обязателен) / отмена. */
+const commentKeyboard = new InlineKeyboard()
+  .text('⏭ Пропустить', CB_SKIP)
+  .text('❌ Отмена', CB_CANCEL);
 
 /** Подтверждение заказа: подтвердить / изменить (= назад) / отмена (SPEC §6). */
 const confirmKeyboard = new InlineKeyboard()
@@ -154,8 +187,12 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
     bot.callbackQuery(CB_CONFIRM_YES, (ctx) => this.onConfirmYes(ctx));
     bot.callbackQuery(CB_BACK, (ctx) => this.onBack(ctx));
     bot.callbackQuery(CB_CANCEL, (ctx) => this.onCancel(ctx));
+    bot.callbackQuery(CB_SKIP, (ctx) => this.onSkipComment(ctx));
     // message:text регистрируется ПОСЛЕ command('start'), чтобы /start не попадал сюда.
     bot.on('message:text', (ctx) => this.onText(ctx));
+    // Фоллбэк для НЕ-текстовых сообщений (фото/гео/стикер): ловится последним,
+    // т.к. text/contact-хендлеры выше обрывают цепочку для своих типов.
+    bot.on('message', (ctx) => this.onNonTextMessage(ctx));
   }
 
   /** /start: известного клиента ведём в меню, нового — на запрос контакта. */
@@ -164,7 +201,7 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
     const client = await this.clients.findByTelegramId(BigInt(ctx.from.id));
     if (!client) {
       this.resetSession(ctx, Step.AwaitContact);
-      await ctx.reply(texts.awaitContact, { reply_markup: contactKeyboard });
+      await this.replyMenu(ctx, texts.awaitContact, contactKeyboard);
       return;
     }
     await this.showMainMenu(ctx, client.name);
@@ -177,7 +214,7 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
     if (!contact) return;
     // Принимаем только собственный контакт пользователя (SPEC §9).
     if (contact.user_id !== ctx.from.id) {
-      await ctx.reply(texts.foreignContact, { reply_markup: contactKeyboard });
+      await this.replyMenu(ctx, texts.foreignContact, contactKeyboard);
       return;
     }
 
@@ -197,14 +234,15 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
 
   /**
    * Единая точка обработки текста: сначала reply-кнопки меню (глобальная
-   * навигация, SPEC §6), затем — ввод адреса на шаге AwaitAddress. Совпадение
-   * с кнопкой имеет приоритет, поэтому «💰 Цены» не сохранится как адрес.
+   * навигация, SPEC §6), затем — ввод адреса (AwaitAddress) или комментария
+   * (AwaitComment). Совпадение с кнопкой имеет приоритет, поэтому «💰 Цены» не
+   * сохранится как адрес/комментарий.
    */
   private async onText(ctx: BotContext): Promise<void> {
-    const raw = ctx.message?.text?.trim();
-    if (!raw) return;
+    const text = ctx.message?.text?.trim();
+    if (!text) return;
 
-    switch (raw) {
+    switch (text) {
       case BTN_ORDER:
         await this.startOrder(ctx);
         return;
@@ -221,15 +259,61 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
         break;
     }
 
-    if (ctx.session.step !== Step.AwaitAddress) return;
+    if (ctx.session.step === Step.AwaitAddress) {
+      await this.onAddressInput(ctx, text);
+    } else if (ctx.session.step === Step.AwaitComment) {
+      await this.finalizeAddress(ctx, text);
+    }
+  }
+
+  /**
+   * Не-текстовое сообщение (фото, гео, голос, стикер). Если ждём адрес или
+   * комментарий — мягко просим прислать текстом (активный экран с «Отмена» не
+   * трогаем, чтобы из него можно было выйти). В остальных состояниях — игнор.
+   */
+  private async onNonTextMessage(ctx: BotContext): Promise<void> {
+    const step = ctx.session.step;
+    if (step === Step.AwaitAddress || step === Step.AwaitComment) {
+      await ctx.reply(texts.sendAsText);
+    }
+  }
+
+  /** Введён адрес (AWAIT_ADDRESS): запоминаем raw и идём собирать комментарий. */
+  private async onAddressInput(ctx: BotContext, raw: string): Promise<void> {
     const client = await this.requireClient(ctx);
     if (!client) return;
-
-    await this.clients.addAddress(client.id, { raw, isDefault: true });
-    const address = await this.clients.getDefaultAddress(client.id);
-    if (!address) return;
+    ctx.session.addressRaw = raw;
     this.pushHistory(ctx, Step.AwaitAddress);
-    await this.renderChooseQty(ctx);
+    await this.renderCommentPrompt(ctx);
+  }
+
+  /** «Пропустить» комментарий (AWAIT_COMMENT): создаём адрес без комментария. */
+  private async onSkipComment(ctx: BotContext): Promise<void> {
+    await ctx.answerCallbackQuery();
+    if (ctx.session.step !== Step.AwaitComment) return;
+    await this.finalizeAddress(ctx, null);
+  }
+
+  /**
+   * Завершает сбор адреса: создаёт default-адрес с (опц.) комментарием и ведёт
+   * к выбору количества. addressRaw остаётся в сессии до выхода из сценария
+   * (resetSession), чтобы «Назад» на шаг комментария снова имел адрес.
+   */
+  private async finalizeAddress(
+    ctx: BotContext,
+    comment: string | null,
+  ): Promise<void> {
+    const client = await this.requireClient(ctx);
+    if (!client) return;
+    const raw = ctx.session.addressRaw;
+    if (!raw) {
+      await this.renderAddressPrompt(ctx);
+      return;
+    }
+    // upsert, а не create: повторный проход шага (возврат «Назад») не плодит дубли.
+    await this.clients.setDefaultAddress(client.id, { raw, comment });
+    this.pushHistory(ctx, Step.AwaitComment);
+    await this.renderChooseQty(ctx, client.id);
   }
 
   /**
@@ -248,7 +332,7 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
       await this.renderAddressPrompt(ctx);
       return;
     }
-    await this.renderChooseQty(ctx);
+    await this.renderChooseQty(ctx, client.id);
   }
 
   /** «Мои заказы»: последние заказы клиента (SPEC §6). Прерывает активный заказ. */
@@ -259,7 +343,7 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
 
     const orders = await this.orders.listByClient(client.id);
     const text = orders.length ? texts.history(orders) : texts.historyEmpty;
-    await ctx.reply(text, { reply_markup: mainReplyKeyboard });
+    await this.replyMenu(ctx, text);
   }
 
   /** «Цены»: текущая сетка из PriceSettings (SPEC §6). Прерывает активный заказ. */
@@ -269,7 +353,7 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
     this.leaveOrderFlow(ctx);
 
     const prices = await this.pricingSettings.getCurrent();
-    await ctx.reply(texts.prices(prices), { reply_markup: mainReplyKeyboard });
+    await this.replyMenu(ctx, texts.prices(prices));
   }
 
   /** «Связаться»: телефон поддержки из конфига (SPEC §6, §11). */
@@ -280,7 +364,7 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
 
     const phone =
       this.config.get<string>('SUPPORT_PHONE') ?? '(телефон уточняется)';
-    await ctx.reply(texts.contacts(phone), { reply_markup: mainReplyKeyboard });
+    await this.replyMenu(ctx, texts.contacts(phone));
   }
 
   /** Выбрано количество: считаем превью суммы и показываем подтверждение. */
@@ -289,6 +373,9 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
     if (ctx.session.step !== Step.ChooseQty) return;
     const bottles = Number(ctx.match?.[1]);
     if (!Number.isInteger(bottles) || bottles < 1) return;
+    // Защита от подделанного callback'а (UI даёт максимум MAX_QTY/повтор реального
+    // заказа). Аномально большой объём — на телефон диспетчеру, не через бота.
+    if (bottles > MAX_ORDER_QTY) return;
 
     const client = await this.requireClient(ctx);
     if (!client) return;
@@ -318,8 +405,18 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
     // Уводим из Confirm ДО создания заказа — повторный тап не создаст дубль.
     this.resetSession(ctx, Step.MainMenu);
 
-    await this.orders.createOrder(client.id, bottles);
-    await ctx.reply(texts.orderDone, { reply_markup: mainReplyKeyboard });
+    try {
+      await this.orders.createOrder(client.id, bottles);
+    } catch (err) {
+      // Сбой создания (БД/гонка) — не молчим: клиент должен понять, что заказ
+      // не оформлен, и повторить (выбор кол-ва уже сброшен — оформит заново).
+      this.logger.error(
+        `createOrder failed for client ${client.id}: ${(err as Error).message}`,
+      );
+      await this.replyMenu(ctx, texts.orderError);
+      return;
+    }
+    await this.replyMenu(ctx, texts.orderDone);
   }
 
   /** «Назад» (в т.ч. «Изменить» на Confirm): шаг назад по стеку истории. */
@@ -337,13 +434,17 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
       await this.renderAddressPrompt(ctx);
       return;
     }
+    if (prev === Step.AwaitComment) {
+      await this.renderCommentPrompt(ctx);
+      return;
+    }
     // prev === ChooseQty: вернуться к выбору количества.
     const address = await this.clients.getDefaultAddress(client.id);
     if (!address) {
       await this.renderAddressPrompt(ctx);
       return;
     }
-    await this.renderChooseQty(ctx);
+    await this.renderChooseQty(ctx, client.id);
   }
 
   /** «Отмена»: выход из сценария заказа в главное меню. */
@@ -352,7 +453,7 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
     const client = await this.requireClient(ctx);
     if (!client) return;
     this.resetSession(ctx, Step.MainMenu);
-    await ctx.reply(texts.orderCancelled, { reply_markup: mainReplyKeyboard });
+    await this.replyMenu(ctx, texts.orderCancelled);
   }
 
   // --- Render-хелперы экранов: ставят шаг и отрисовывают (SPEC §6) -----------
@@ -362,17 +463,26 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
     name: string | null,
   ): Promise<void> {
     this.resetSession(ctx, Step.MainMenu);
-    await ctx.reply(texts.mainMenu(name), { reply_markup: mainReplyKeyboard });
+    await this.replyMenu(ctx, texts.mainMenu(name));
   }
 
   private async renderAddressPrompt(ctx: BotContext): Promise<void> {
     ctx.session.step = Step.AwaitAddress;
-    await ctx.reply(texts.awaitAddress, { reply_markup: addressKeyboard });
+    await this.replyInline(ctx, texts.awaitAddress, addressKeyboard);
   }
 
-  private async renderChooseQty(ctx: BotContext): Promise<void> {
+  private async renderCommentPrompt(ctx: BotContext): Promise<void> {
+    ctx.session.step = Step.AwaitComment;
+    await this.replyInline(ctx, texts.awaitComment, commentKeyboard);
+  }
+
+  private async renderChooseQty(
+    ctx: BotContext,
+    clientId: string,
+  ): Promise<void> {
     ctx.session.step = Step.ChooseQty;
-    await ctx.reply(texts.chooseQty, { reply_markup: qtyKeyboard });
+    const repeatN = await this.orders.lastBottles(clientId);
+    await this.replyInline(ctx, texts.chooseQty, buildQtyKeyboard(repeatN));
   }
 
   private async renderConfirm(
@@ -382,22 +492,69 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
   ): Promise<void> {
     const bottles = ctx.session.bottles;
     if (!bottles) {
-      await this.renderChooseQty(ctx);
+      await this.renderChooseQty(ctx, clientId);
       return;
     }
     const quote = await this.orders.quote(clientId, bottles);
     ctx.session.step = Step.Confirm;
-    await ctx.reply(texts.confirm(quote, address), {
-      reply_markup: confirmKeyboard,
-    });
+    await this.replyInline(ctx, texts.confirm(quote, address), confirmKeyboard);
+  }
+
+  // --- Отправка экранов с очисткой висящих inline-кнопок --------------------
+
+  /**
+   * Inline-экран сценария: гасит клавиатуру прошлого экрана и запоминает
+   * message_id нового, чтобы при следующем переходе снять кнопки и с него.
+   */
+  private async replyInline(
+    ctx: BotContext,
+    text: string,
+    keyboard: InlineKeyboard,
+  ): Promise<void> {
+    await this.clearActiveInline(ctx);
+    const msg = await ctx.reply(text, { reply_markup: keyboard });
+    ctx.session.activeInlineMessageId = msg.message_id;
+  }
+
+  /**
+   * Экран с reply-меню (или запросом контакта): гасит висящую inline-клавиатуру
+   * сценария. Свой message_id не запоминаем — у reply-клавиатуры её нет.
+   */
+  private async replyMenu(
+    ctx: BotContext,
+    text: string,
+    keyboard: Keyboard = mainReplyKeyboard,
+  ): Promise<void> {
+    await this.clearActiveInline(ctx);
+    await ctx.reply(text, { reply_markup: keyboard });
+  }
+
+  /**
+   * Снимает inline-клавиатуру с последнего экрана сценария (если он был).
+   * Ошибку (сообщение удалено/слишком старое) глотаем — это не критично.
+   */
+  private async clearActiveInline(ctx: BotContext): Promise<void> {
+    const id = ctx.session.activeInlineMessageId;
+    ctx.session.activeInlineMessageId = undefined;
+    if (id === undefined || !ctx.chat) return;
+    try {
+      await ctx.api.editMessageReplyMarkup(ctx.chat.id, id);
+    } catch {
+      // сообщение уже удалено/недоступно — игнорируем
+    }
   }
 
   // --- Управление сессией ---------------------------------------------------
 
-  /** Сбрасывает локальное состояние сценария и ставит указанный шаг. */
+  /**
+   * Сбрасывает локальное состояние сценария и ставит указанный шаг.
+   * `activeInlineMessageId` НЕ трогаем — им управляют replyInline/replyMenu,
+   * иначе мы потеряли бы id до того, как сняли с сообщения клавиатуру.
+   */
   private resetSession(ctx: BotContext, step: Step): void {
     ctx.session.step = step;
     ctx.session.bottles = undefined;
+    ctx.session.addressRaw = undefined;
     ctx.session.history = [];
   }
 
@@ -424,7 +581,7 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
     const client = await this.clients.findByTelegramId(BigInt(ctx.from.id));
     if (!client) {
       this.resetSession(ctx, Step.AwaitContact);
-      await ctx.reply(texts.awaitContact, { reply_markup: contactKeyboard });
+      await this.replyMenu(ctx, texts.awaitContact, contactKeyboard);
       return null;
     }
     return client;

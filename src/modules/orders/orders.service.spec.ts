@@ -41,6 +41,7 @@ describe('OrdersService', () => {
     order: {
       create: jest.Mock;
       count: jest.Mock;
+      findFirst: jest.Mock;
       findUnique: jest.Mock;
       findUniqueOrThrow: jest.Mock;
       update: jest.Mock;
@@ -55,6 +56,7 @@ describe('OrdersService', () => {
       order: {
         create: jest.fn(),
         count: jest.fn(),
+        findFirst: jest.fn(),
         findUnique: jest.fn(),
         findUniqueOrThrow: jest.fn(),
         update: jest.fn(),
@@ -133,6 +135,27 @@ describe('OrdersService', () => {
 
       await expect(service.createOrder('c1', 1)).rejects.toThrow();
       expect(prisma.order.create).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('lastBottles', () => {
+    it('возвращает bottles последнего не-отменённого заказа', async () => {
+      prisma.order.findFirst.mockResolvedValue({ bottles: 3 });
+
+      const result = await service.lastBottles('c1');
+
+      expect(result).toBe(3);
+      expect(prisma.order.findFirst).toHaveBeenCalledWith({
+        where: { clientId: 'c1', status: { not: 'CANCELLED' } },
+        orderBy: { createdAt: 'desc' },
+        select: { bottles: true },
+      });
+    });
+
+    it('возвращает null, если повторять нечего', async () => {
+      prisma.order.findFirst.mockResolvedValue(null);
+
+      await expect(service.lastBottles('c1')).resolves.toBeNull();
     });
   });
 

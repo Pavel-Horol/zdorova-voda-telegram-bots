@@ -56,6 +56,20 @@ export class OrdersService {
     });
   }
 
+  /**
+   * Количество бутылей последнего не-отменённого заказа клиента — для кнопки
+   * «Повторить прошлый заказ» (SPEC §6). null, если повторять нечего (нет заказов
+   * или все отменены — тогда это фактически первый заказ).
+   */
+  async lastBottles(clientId: string): Promise<number | null> {
+    const last = await this.prisma.order.findFirst({
+      where: { clientId, status: { not: OrderStatus.CANCELLED } },
+      orderBy: { createdAt: 'desc' },
+      select: { bottles: true },
+    });
+    return last?.bottles ?? null;
+  }
+
   /** Заказ с клиентом и адресом — для перерисовки сообщения у диспетчера (SPEC §7). */
   getOrderView(id: string): Promise<OrderWithRelations | null> {
     return this.prisma.order.findUnique({
