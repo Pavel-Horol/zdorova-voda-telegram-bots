@@ -19,7 +19,9 @@ import {
   type DispatcherSession,
 } from './dispatcher-bot.bot';
 import {
+  activeOrdersHeader,
   dispatcherWelcome,
+  noActiveOrders,
   orderKeyboard,
   orderMessage,
   priceFieldLabel,
@@ -28,11 +30,14 @@ import {
 } from './dispatcher-bot.texts';
 
 // Подписи reply-кнопок постоянного меню (они же — ключи текстового роутера).
+const BTN_ORDERS = '📋 Активные';
 const BTN_PRICES = '💰 Цены';
 const BTN_STATS = '📊 Статистика';
 
 /** Постоянное reply-меню диспетчера — всегда внизу экрана (по образцу клиента). */
 const dispatcherMenuKeyboard = new Keyboard()
+  .text(BTN_ORDERS)
+  .row()
   .text(BTN_PRICES)
   .text(BTN_STATS)
   .resized()
@@ -95,6 +100,7 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
 
   private registerHandlers(bot: DispatcherBot): void {
     bot.command('start', (ctx) => this.onStart(ctx));
+    bot.command('orders', (ctx) => this.onActiveOrders(ctx));
     bot.command('prices', (ctx) => this.onPrices(ctx));
     bot.command('stats', (ctx) => this.onStats(ctx));
     bot.callbackQuery(/^acc:(.+)$/, (ctx) => this.onTransition(ctx, 'accept'));
@@ -152,6 +158,25 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
     });
   }
 
+  /**
+   * /orders (и кнопка «📋 Активные») — рабочая очередь: заказы в статусах
+   * created/accepted каждый отдельной карточкой с кнопками действий, чтобы их
+   * можно было обработать, даже если исходный пуш уехал вверх по чату.
+   */
+  private async onActiveOrders(ctx: DispatcherContext): Promise<void> {
+    const orders = await this.orders.listActive();
+    if (!orders.length) {
+      await ctx.reply(noActiveOrders);
+      return;
+    }
+    await ctx.reply(activeOrdersHeader(orders.length));
+    for (const order of orders) {
+      await ctx.reply(orderMessage(order, order.client, order.address), {
+        reply_markup: orderKeyboard(order.id, order.status),
+      });
+    }
+  }
+
   /** /prices — текущие цены + кнопки выбора поля для редактирования. */
   private async onPrices(ctx: DispatcherContext): Promise<void> {
     // Сбрасываем незавершённое редактирование: повторный вход в /prices отменяет
@@ -180,6 +205,10 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
     const text = ctx.message?.text?.trim();
     if (!text) return;
 
+    if (text === BTN_ORDERS) {
+      await this.onActiveOrders(ctx);
+      return;
+    }
     if (text === BTN_PRICES) {
       await this.onPrices(ctx);
       return;

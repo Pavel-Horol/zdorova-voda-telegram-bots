@@ -87,6 +87,22 @@ export class OrdersService {
   }
 
   /**
+   * Активные заказы (created/accepted) для команды /orders диспетчера: рабочая
+   * очередь, если пуш уехал вверх по чату. Сначала старые (FIFO). limit —
+   * страховка от флуда сообщениями в чат.
+   */
+  listActive(limit = 20): Promise<OrderWithRelations[]> {
+    return this.prisma.order.findMany({
+      where: {
+        status: { in: [OrderStatus.CREATED, OrderStatus.ACCEPTED] },
+      },
+      orderBy: { createdAt: 'asc' },
+      take: limit,
+      include: { client: true, address: true },
+    });
+  }
+
+  /**
    * Минимальная сводка за сегодня для /stats (SPEC §7): число заказов и сумма,
    * без отменённых. Полноценная статистика — отдельный модуль позже.
    */

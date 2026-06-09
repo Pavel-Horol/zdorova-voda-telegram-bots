@@ -31,7 +31,15 @@ export function priceFieldLabel(field: EditablePriceField): string {
 export const dispatcherWelcome =
   'Диспетчерский бот 🚰\n' +
   'Новые заказы приходят сюда автоматически — обрабатывайте кнопками под ними.\n' +
-  'Меню ниже: цены и статистика.';
+  'Меню ниже: активные заказы, цены и статистика.';
+
+/** Заголовок списка активных заказов (/orders). */
+export function activeOrdersHeader(count: number): string {
+  return `📋 Активные заказы: ${count}`;
+}
+
+/** Активных заказов нет (/orders). */
+export const noActiveOrders = 'Активных заказов нет 👍';
 
 /**
  * Строка заказа в привычном диспетчеру формате — её удобно переслать водителю
