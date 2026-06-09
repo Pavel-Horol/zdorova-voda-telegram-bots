@@ -103,21 +103,38 @@ export class OrdersService {
   }
 
   /**
-   * Минимальная сводка за сегодня для /stats (SPEC §7): число заказов и сумма,
-   * без отменённых. Полноценная статистика — отдельный модуль позже.
+   * Сводка для /stats (SPEC §7): число заказов и сумма за сегодня и за последние
+   * 7 дней, без отменённых. «Сегодня» — от локальной полуночи, «неделя» —
+   * скользящие 7 суток. Полноценная аналитика — отдельный модуль позже.
    */
-  async statsToday(): Promise<{ count: number; sum: number }> {
-    const since = new Date();
-    since.setHours(0, 0, 0, 0);
-    const where = {
-      createdAt: { gte: since },
-      status: { not: OrderStatus.CANCELLED },
+  async stats(): Promise<{
+    today: { count: number; sum: number };
+    week: { count: number; sum: number };
+  }> {
+    const startOfToday = new Date();
+    startOfToday.setHours(0, 0, 0, 0);
+    const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+    const notCancelled = { status: { not: OrderStatus.CANCELLED } };
+    const todayWhere = { ...notCancelled, createdAt: { gte: startOfToday } };
+    const weekWhere = { ...notCancelled, createdAt: { gte: weekAgo } };
+
+    const [todayCount, todayAgg, weekCount, weekAgg] =
+      await this.prisma.$transaction([
+        this.prisma.order.count({ where: todayWhere }),
+        this.prisma.order.aggregate({
+          where: todayWhere,
+          _sum: { totalPrice: true },
+        }),
+        this.prisma.order.count({ where: weekWhere }),
+        this.prisma.order.aggregate({
+          where: weekWhere,
+          _sum: { totalPrice: true },
+        }),
+      ]);
+    return {
+      today: { count: todayCount, sum: todayAgg._sum.totalPrice ?? 0 },
+      week: { count: weekCount, sum: weekAgg._sum.totalPrice ?? 0 },
     };
-    const [count, agg] = await this.prisma.$transaction([
-      this.prisma.order.count({ where }),
-      this.prisma.order.aggregate({ where, _sum: { totalPrice: true } }),
-    ]);
-    return { count, sum: agg._sum.totalPrice ?? 0 };
   }
 
   /**

@@ -29,6 +29,7 @@ import {
   priceFieldLabel,
   pricesKeyboard,
   pricesMessage,
+  statsMessage,
 } from './dispatcher-bot.texts';
 
 // Подписи reply-кнопок постоянного меню (они же — ключи текстового роутера).
@@ -248,11 +249,9 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
     });
   }
 
-  /** /stats — минимальная сводка за сегодня (SPEC §7). */
+  /** /stats — сводка за сегодня и за неделю (SPEC §7). */
   private async onStats(ctx: DispatcherContext): Promise<void> {
-    const stats = await this.orders.statsToday();
-    await ctx.reply(
-      `Сегодня: ${stats.count} заказ(ов), сумма ${stats.sum} грн (без отменённых).`,
-    );
+    const stats = await this.orders.stats();
+    await ctx.reply(statsMessage(stats));
   }
 }

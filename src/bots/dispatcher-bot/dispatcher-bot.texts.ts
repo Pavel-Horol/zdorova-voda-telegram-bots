@@ -38,6 +38,29 @@ export function activeOrdersHeader(count: number): string {
   return `📋 Активные заказы: ${count}`;
 }
 
+/** Дата-время заказа в карточке: киевское время, формат «ДД.ММ, ЧЧ:ММ». */
+function formatDateTime(d: Date): string {
+  return new Intl.DateTimeFormat('uk-UA', {
+    timeZone: 'Europe/Kyiv',
+    day: '2-digit',
+    month: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(d);
+}
+
+/** Сводка /stats (SPEC §7): сегодня + за неделю, без отменённых. */
+export function statsMessage(stats: {
+  today: { count: number; sum: number };
+  week: { count: number; sum: number };
+}): string {
+  return (
+    '📊 Статистика (без отменённых):\n' +
+    `Сегодня: ${stats.today.count} заказ(ов), сумма ${stats.today.sum} грн\n` +
+    `За неделю: ${stats.week.count} заказ(ов), сумма ${stats.week.sum} грн`
+  );
+}
+
 /** Активных заказов нет (/orders). */
 export const noActiveOrders = 'Активных заказов нет 👍';
 
@@ -85,6 +108,7 @@ export function orderMessage(
   const name = client.name ?? 'без имени';
   return (
     `${header} #${order.id.slice(0, 8)}${firstMark}\n` +
+    `🕒 ${formatDateTime(order.createdAt)}\n` +
     `${driverLine(order, address)}\n` +
     `Клиент: ${name} (${client.phone})\n` +
     `Сумма: ${order.totalPrice} грн`
