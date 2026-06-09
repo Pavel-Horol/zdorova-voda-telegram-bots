@@ -20,6 +20,8 @@ import {
 } from './dispatcher-bot.bot';
 import {
   activeOrdersHeader,
+  dispatcherCommands,
+  dispatcherHelp,
   dispatcherWelcome,
   noActiveOrders,
   orderKeyboard,
@@ -75,6 +77,13 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
       this.logger.error(`dispatcher-bot error: ${err.message}`),
     );
 
+    // Меню команд Telegram («/») — независимый API-вызов, не блокируем запуск.
+    void bot.api
+      .setMyCommands(dispatcherCommands)
+      .catch((err: Error) =>
+        this.logger.warn(`setMyCommands failed: ${err.message}`),
+      );
+
     // start() резолвится только при остановке — НЕ await, иначе init зависнет.
     void bot.start({
       onStart: (me) =>
@@ -100,6 +109,7 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
 
   private registerHandlers(bot: DispatcherBot): void {
     bot.command('start', (ctx) => this.onStart(ctx));
+    bot.command('help', (ctx) => this.onHelp(ctx));
     bot.command('orders', (ctx) => this.onActiveOrders(ctx));
     bot.command('prices', (ctx) => this.onPrices(ctx));
     bot.command('stats', (ctx) => this.onStats(ctx));
@@ -156,6 +166,11 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
     await ctx.reply(dispatcherWelcome, {
       reply_markup: dispatcherMenuKeyboard,
     });
+  }
+
+  /** /help — краткая справка по командам. */
+  private async onHelp(ctx: DispatcherContext): Promise<void> {
+    await ctx.reply(dispatcherHelp);
   }
 
   /**

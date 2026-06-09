@@ -41,6 +41,26 @@ export function activeOrdersHeader(count: number): string {
 /** Активных заказов нет (/orders). */
 export const noActiveOrders = 'Активных заказов нет 👍';
 
+/** Справка по командам (/help). */
+export const dispatcherHelp =
+  'Что умеет бот:\n' +
+  '• Новые заказы приходят автоматически — кнопки прямо под сообщением.\n' +
+  '/orders — активные заказы (created/accepted) списком\n' +
+  '/prices — посмотреть и изменить цены\n' +
+  '/stats — статистика по заказам\n' +
+  '/help — эта справка';
+
+/**
+ * Команды для меню Telegram («/»). Регистрируются через setMyCommands при
+ * старте — диспетчер видит подсказки, не запоминая команды.
+ */
+export const dispatcherCommands = [
+  { command: 'orders', description: '📋 Активные заказы' },
+  { command: 'prices', description: '💰 Цены' },
+  { command: 'stats', description: '📊 Статистика' },
+  { command: 'help', description: '❓ Справка' },
+];
+
 /**
  * Строка заказа в привычном диспетчеру формате — её удобно переслать водителю
  * (SPEC §7). Повторный: «2по75 Адрес», первый: «2бут [ПЕРВЫЙ +помпа] Адрес».
