@@ -167,6 +167,11 @@ export function pricesMessage(prices: PriceSettings): string {
   );
 }
 
+/** Кнопка отмены под запросом нового значения цены. */
+export function priceEditCancelKeyboard(): InlineKeyboard {
+  return new InlineKeyboard().text('❌ Отмена', 'pe_cancel');
+}
+
 /** Кнопки выбора поля цены для редактирования (SPEC §7). */
 export function pricesKeyboard(): InlineKeyboard {
   return new InlineKeyboard()

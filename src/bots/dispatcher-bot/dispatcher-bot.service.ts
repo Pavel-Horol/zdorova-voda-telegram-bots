@@ -30,6 +30,7 @@ import {
   noActiveOrders,
   orderKeyboard,
   orderMessage,
+  priceEditCancelKeyboard,
   priceFieldLabel,
   pricesKeyboard,
   pricesMessage,
@@ -125,6 +126,7 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
     bot.callbackQuery(/^del:(.+)$/, (ctx) => this.onTransition(ctx, 'deliver'));
     bot.callbackQuery(/^can:(.+)$/, (ctx) => this.onTransition(ctx, 'cancel'));
     bot.callbackQuery(/^edit:(.+)$/, (ctx) => this.onEditOrder(ctx));
+    bot.callbackQuery('pe_cancel', (ctx) => this.onCancelPriceEdit(ctx));
     bot.callbackQuery(
       /^pe:(price1|price2|price3plus|depositPerBottle|pumpPrice)$/,
       (ctx) => this.onPickPriceField(ctx),
@@ -220,7 +222,17 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
     ctx.session.editingPriceField = field;
     await ctx.reply(
       `Введите новое значение для «${priceFieldLabel(field)}» (целое число грн):`,
+      { reply_markup: priceEditCancelKeyboard() },
     );
+  }
+
+  /** «❌ Отмена» под запросом цены: сбрасываем редактирование. */
+  private async onCancelPriceEdit(ctx: DispatcherContext): Promise<void> {
+    await ctx.answerCallbackQuery();
+    if (!ctx.session.editingPriceField) return; // уже сохранено/неактуально
+    ctx.session.editingPriceField = undefined;
+    // editMessageText без reply_markup убирает и кнопку «Отмена».
+    await ctx.editMessageText('Изменение цены отменено.');
   }
 
   /** «✏️ Изменить»: запоминаем заказ и ждём новое количество бутылей текстом. */
