@@ -49,7 +49,10 @@ describe('OrdersService', () => {
   };
   let clients: { getById: jest.Mock; getDefaultAddress: jest.Mock };
   let pricingSettings: { getCurrent: jest.Mock };
-  let dispatcher: { notifyNewOrder: jest.Mock };
+  let dispatcher: {
+    notifyNewOrder: jest.Mock;
+    notifyClientCancelled: jest.Mock;
+  };
 
   beforeEach(() => {
     prisma = {
@@ -67,7 +70,10 @@ describe('OrdersService', () => {
       getDefaultAddress: jest.fn().mockResolvedValue(address),
     };
     pricingSettings = { getCurrent: jest.fn().mockResolvedValue(prices) };
-    dispatcher = { notifyNewOrder: jest.fn().mockResolvedValue(undefined) };
+    dispatcher = {
+      notifyNewOrder: jest.fn().mockResolvedValue(undefined),
+      notifyClientCancelled: jest.fn().mockResolvedValue(undefined),
+    };
 
     service = new OrdersService(
       prisma as unknown as PrismaService,
@@ -173,7 +179,9 @@ describe('OrdersService', () => {
         expect.objectContaining({
           // where включает status: from — атомарный гард перехода (см. transition).
           where: { id: 'o1', status: 'CREATED' },
-          data: expect.objectContaining({ status: 'ACCEPTED' }),
+          // as object: expect.objectContaining() типизирован как any (jest),
+          // каст снимает no-unsafe-assignment при вложении в литерал.
+          data: expect.objectContaining({ status: 'ACCEPTED' }) as object,
         }),
       );
     });
@@ -196,6 +204,67 @@ describe('OrdersService', () => {
 
       await expect(service.cancelOrder('o1')).rejects.toThrow();
       expect(prisma.order.update).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('cancelOwnOrder (отмена клиентом)', () => {
+    it('отменяет свой CREATED-заказ и уведомляет диспетчера', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue({
+        id: 'o1',
+        clientId: 'c1',
+        status: 'CREATED',
+      });
+      const cancelled = { id: 'o1', clientId: 'c1', status: 'CANCELLED' };
+      prisma.order.update.mockResolvedValue(cancelled);
+
+      await service.cancelOwnOrder('o1', 'c1');
+
+      expect(prisma.order.update).toHaveBeenCalledWith({
+        // where включает status — атомарный гард от гонки с принятием.
+        where: { id: 'o1', status: 'CREATED' },
+        data: { status: 'CANCELLED' },
+      });
+      expect(dispatcher.notifyClientCancelled).toHaveBeenCalledWith(
+        cancelled,
+        client,
+      );
+    });
+
+    it('чужой заказ отменить нельзя (не тот clientId)', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue({
+        id: 'o1',
+        clientId: 'другой',
+        status: 'CREATED',
+      });
+
+      await expect(service.cancelOwnOrder('o1', 'c1')).rejects.toThrow();
+      expect(prisma.order.update).not.toHaveBeenCalled();
+      expect(dispatcher.notifyClientCancelled).not.toHaveBeenCalled();
+    });
+
+    it('уже принятый заказ (ACCEPTED) клиент отменить не может', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue({
+        id: 'o1',
+        clientId: 'c1',
+        status: 'ACCEPTED',
+      });
+
+      await expect(service.cancelOwnOrder('o1', 'c1')).rejects.toThrow();
+      expect(prisma.order.update).not.toHaveBeenCalled();
+    });
+
+    it('сбой уведомления диспетчера не валит отмену', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue({
+        id: 'o1',
+        clientId: 'c1',
+        status: 'CREATED',
+      });
+      prisma.order.update.mockResolvedValue({ id: 'o1', status: 'CANCELLED' });
+      dispatcher.notifyClientCancelled.mockRejectedValue(new Error('tg down'));
+
+      await expect(service.cancelOwnOrder('o1', 'c1')).resolves.toMatchObject({
+        status: 'CANCELLED',
+      });
     });
   });
 });

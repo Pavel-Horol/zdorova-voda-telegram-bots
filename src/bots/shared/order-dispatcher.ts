@@ -17,6 +17,11 @@ export const ORDER_DISPATCHER = Symbol('ORDER_DISPATCHER');
  */
 export interface OrderDispatcher {
   notifyNewOrder(order: Order, client: Client, address: Address): Promise<void>;
+  /**
+   * Заказ отменён самим клиентом из бота (SPEC §9). Сообщение диспетчеру с
+   * inline-кнопками к этому моменту устарело — шлём отдельное уведомление.
+   */
+  notifyClientCancelled(order: Order, client: Client): Promise<void>;
 }
 
 /**
@@ -37,6 +42,11 @@ export class LogOrderDispatcher implements OrderDispatcher {
       `New order ${order.id}: ${order.bottles} бут., ${order.totalPrice} грн — ` +
         `${client.name ?? 'без имени'} ${client.phone}, ${address.raw}`,
     );
+    return Promise.resolve();
+  }
+
+  notifyClientCancelled(order: Order, client: Client): Promise<void> {
+    this.logger.log(`Order ${order.id} cancelled by client ${client.phone}`);
     return Promise.resolve();
   }
 }

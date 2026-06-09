@@ -79,6 +79,15 @@ export function orderKeyboard(
   }
 }
 
+/** Уведомление диспетчеру об отмене заказа клиентом из бота (SPEC §9). */
+export function clientCancelledMessage(order: Order, client: Client): string {
+  const name = client.name ?? 'без имени';
+  return (
+    `❌ Клиент отменил заказ #${order.id.slice(0, 8)}\n` +
+    `Клиент: ${name} (${client.phone})`
+  );
+}
+
 /** Текущие цены (SPEC §7, /prices). */
 export function pricesMessage(prices: PriceSettings): string {
   return (

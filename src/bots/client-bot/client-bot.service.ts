@@ -16,7 +16,8 @@ import {
 import { ClientsService } from '../../modules/clients/clients.service';
 import { OrdersService } from '../../modules/orders/orders.service';
 import { PricingSettingsService } from '../../modules/pricing-settings/pricing-settings.service';
-import type { Address } from '../../../generated/prisma/client';
+import type { Address, Order } from '../../../generated/prisma/client';
+import { OrderStatus } from '../../../generated/prisma/enums';
 import { texts } from './client-bot.texts';
 
 /** Шаги диалога клиента (SPEC §6). Хранятся в in-memory сессии grammY. */
@@ -116,6 +117,21 @@ function buildQtyKeyboard(repeatN: number | null): InlineKeyboard {
   return kb;
 }
 
+/**
+ * Кнопки отмены под списком «Мои заказы»: по одной на заказ в статусе CREATED
+ * (диспетчер ещё не принял — клиент может отменить сам, SPEC §9). Если отменять
+ * нечего — undefined (список идёт обычным текстом без inline-клавиатуры).
+ */
+function buildHistoryKeyboard(orders: Order[]): InlineKeyboard | undefined {
+  const cancellable = orders.filter((o) => o.status === OrderStatus.CREATED);
+  if (!cancellable.length) return undefined;
+  const kb = new InlineKeyboard();
+  for (const o of cancellable) {
+    kb.text(`❌ Отменить #${o.id.slice(0, 8)}`, `ocancel:${o.id}`).row();
+  }
+  return kb;
+}
+
 /** Под приглашением адреса — только «Отмена» (с первого шага «назад» = выход). */
 const addressKeyboard = new InlineKeyboard().text('❌ Отмена', CB_CANCEL);
 
@@ -188,6 +204,7 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
     bot.callbackQuery(CB_BACK, (ctx) => this.onBack(ctx));
     bot.callbackQuery(CB_CANCEL, (ctx) => this.onCancel(ctx));
     bot.callbackQuery(CB_SKIP, (ctx) => this.onSkipComment(ctx));
+    bot.callbackQuery(/^ocancel:(.+)$/, (ctx) => this.onCancelOwnOrder(ctx));
     // message:text регистрируется ПОСЛЕ command('start'), чтобы /start не попадал сюда.
     bot.on('message:text', (ctx) => this.onText(ctx));
     // Фоллбэк для НЕ-текстовых сообщений (фото/гео/стикер): ловится последним,
@@ -335,7 +352,11 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
     await this.renderChooseQty(ctx, client.id);
   }
 
-  /** «Мои заказы»: последние заказы клиента (SPEC §6). Прерывает активный заказ. */
+  /**
+   * «Мои заказы»: последние заказы клиента (SPEC §6). Прерывает активный заказ.
+   * Под заказами в статусе CREATED — кнопки отмены (SPEC §9); если их нет,
+   * список идёт обычным текстом с reply-меню.
+   */
   private async showHistory(ctx: BotContext): Promise<void> {
     const client = await this.requireClient(ctx);
     if (!client) return;
@@ -343,7 +364,41 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
 
     const orders = await this.orders.listByClient(client.id);
     const text = orders.length ? texts.history(orders) : texts.historyEmpty;
-    await this.replyMenu(ctx, text);
+    const kb = buildHistoryKeyboard(orders);
+    if (kb) await this.replyInline(ctx, text, kb);
+    else await this.replyMenu(ctx, text);
+  }
+
+  /**
+   * Отмена своего заказа из списка (SPEC §9). Владелец и статус проверяются в
+   * сервисе; здесь — тост о результате и перерисовка списка на месте.
+   */
+  private async onCancelOwnOrder(ctx: BotContext): Promise<void> {
+    const orderId = ctx.match?.[1];
+    const client = await this.requireClient(ctx);
+    if (!client || !orderId) {
+      await ctx.answerCallbackQuery();
+      return;
+    }
+    try {
+      await this.orders.cancelOwnOrder(orderId, client.id);
+    } catch {
+      // Уже принят/доставлен/чужой — отменить нельзя.
+      await ctx.answerCallbackQuery({ text: 'Этот заказ уже нельзя отменить' });
+      return;
+    }
+    await ctx.answerCallbackQuery({ text: 'Заказ отменён' });
+
+    // Перерисовываем список на месте под актуальные статусы и кнопки.
+    const orders = await this.orders.listByClient(client.id);
+    const text = orders.length ? texts.history(orders) : texts.historyEmpty;
+    const kb = buildHistoryKeyboard(orders);
+    try {
+      await ctx.editMessageText(text, kb ? { reply_markup: kb } : undefined);
+      if (!kb) ctx.session.activeInlineMessageId = undefined;
+    } catch {
+      // Сообщение слишком старое для правки — клиент уже увидел тост «отменён».
+    }
   }
 
   /** «Цены»: текущая сетка из PriceSettings (SPEC §6). Прерывает активный заказ. */

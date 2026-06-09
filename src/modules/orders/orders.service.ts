@@ -1,4 +1,4 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { ClientsService } from '../clients/clients.service';
 import { PricingService } from '../pricing/pricing.service';
@@ -36,6 +36,8 @@ export interface OrderQuote {
  */
 @Injectable()
 export class OrdersService {
+  private readonly logger = new Logger(OrdersService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly clients: ClientsService,
@@ -187,6 +189,44 @@ export class OrdersService {
       where: { id },
       data: { status: OrderStatus.CANCELLED },
     });
+  }
+
+  /**
+   * Отмена заказа самим клиентом из бота (SPEC §9). Разрешена только пока
+   * диспетчер не принял (статус CREATED) и только для своего заказа (проверка
+   * владельца по clientId — callback можно подделать, CLAUDE.md прав. 8).
+   * После отмены шлём диспетчеру уведомление best-effort: его сбой не отменяет
+   * саму отмену (прав. 9 — отмена для клиента уже состоялась).
+   */
+  async cancelOwnOrder(orderId: string, clientId: string): Promise<Order> {
+    const order = await this.prisma.order.findUniqueOrThrow({
+      where: { id: orderId },
+    });
+    if (order.clientId !== clientId) {
+      throw new Error(`order ${orderId} does not belong to client ${clientId}`);
+    }
+    if (order.status !== OrderStatus.CREATED) {
+      throw new Error(
+        `client cannot cancel order ${orderId} in status ${order.status}`,
+      );
+    }
+    // where включает status — атомарный гард от гонки с принятием диспетчером.
+    const cancelled = await this.prisma.order.update({
+      where: { id: orderId, status: OrderStatus.CREATED },
+      data: { status: OrderStatus.CANCELLED },
+    });
+
+    const client = await this.clients.getById(clientId);
+    if (client) {
+      try {
+        await this.dispatcher.notifyClientCancelled(cancelled, client);
+      } catch (err) {
+        this.logger.error(
+          `notifyClientCancelled failed for order ${orderId}: ${(err as Error).message}`,
+        );
+      }
+    }
+    return cancelled;
   }
 
   /**
