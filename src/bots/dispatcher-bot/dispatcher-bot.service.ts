@@ -6,7 +6,7 @@ import {
   OnModuleInit,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { session } from 'grammy';
+import { Keyboard, session } from 'grammy';
 import { OrdersService } from '../../modules/orders/orders.service';
 import {
   PricingSettingsService,
@@ -19,12 +19,24 @@ import {
   type DispatcherSession,
 } from './dispatcher-bot.bot';
 import {
+  dispatcherWelcome,
   orderKeyboard,
   orderMessage,
   priceFieldLabel,
   pricesKeyboard,
   pricesMessage,
 } from './dispatcher-bot.texts';
+
+// Подписи reply-кнопок постоянного меню (они же — ключи текстового роутера).
+const BTN_PRICES = '💰 Цены';
+const BTN_STATS = '📊 Статистика';
+
+/** Постоянное reply-меню диспетчера — всегда внизу экрана (по образцу клиента). */
+const dispatcherMenuKeyboard = new Keyboard()
+  .text(BTN_PRICES)
+  .text(BTN_STATS)
+  .resized()
+  .persistent();
 
 /**
  * Диспетчерский бот (SPEC §7): команды /prices, /stats и обработка кнопок под
@@ -82,6 +94,7 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
   }
 
   private registerHandlers(bot: DispatcherBot): void {
+    bot.command('start', (ctx) => this.onStart(ctx));
     bot.command('prices', (ctx) => this.onPrices(ctx));
     bot.command('stats', (ctx) => this.onStats(ctx));
     bot.callbackQuery(/^acc:(.+)$/, (ctx) => this.onTransition(ctx, 'accept'));
@@ -132,8 +145,18 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
     });
   }
 
+  /** /start — приветствие + постоянное reply-меню (точка входа диспетчера). */
+  private async onStart(ctx: DispatcherContext): Promise<void> {
+    await ctx.reply(dispatcherWelcome, {
+      reply_markup: dispatcherMenuKeyboard,
+    });
+  }
+
   /** /prices — текущие цены + кнопки выбора поля для редактирования. */
   private async onPrices(ctx: DispatcherContext): Promise<void> {
+    // Сбрасываем незавершённое редактирование: повторный вход в /prices отменяет
+    // ожидание ввода числа (иначе следующее число ушло бы в прошлое поле).
+    ctx.session.editingPriceField = undefined;
     const prices = await this.pricingSettings.getCurrent();
     await ctx.reply(pricesMessage(prices), { reply_markup: pricesKeyboard() });
   }
@@ -149,11 +172,26 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
     );
   }
 
-  /** Текст: если ждём цену — парсим число и сохраняем; иначе игнор. */
+  /**
+   * Текст: сначала кнопки постоянного меню (приоритет, чтобы «💰 Цены» не ушло
+   * как значение цены), затем — ввод числа на шаге редактирования.
+   */
   private async onText(ctx: DispatcherContext): Promise<void> {
+    const text = ctx.message?.text?.trim();
+    if (!text) return;
+
+    if (text === BTN_PRICES) {
+      await this.onPrices(ctx);
+      return;
+    }
+    if (text === BTN_STATS) {
+      await this.onStats(ctx);
+      return;
+    }
+
     const field = ctx.session.editingPriceField;
     if (!field) return;
-    const value = Number(ctx.message?.text?.trim());
+    const value = Number(text);
     if (!Number.isInteger(value) || value < 0) {
       await ctx.reply('Нужно целое неотрицательное число. Попробуйте ещё раз.');
       return;
