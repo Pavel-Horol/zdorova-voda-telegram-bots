@@ -201,6 +201,39 @@ export class OrdersService {
     };
   }
 
+  /**
+   * Правка количества бутылей в активном заказе диспетчером (SPEC §7, кнопка
+   * «✏️ Изменить»): пересчитывает totalPrice через pricing (по isFirstOrder
+   * заказа и текущим ценам). Это осознанный ручной оверрайд — фиксация цены при
+   * создании (§4) защищает от АВТО-пересчёта при смене прайса, а не от правки
+   * диспетчером. Разрешено только для created/accepted.
+   */
+  async editQuantity(
+    orderId: string,
+    bottles: number,
+  ): Promise<OrderWithRelations> {
+    const order = await this.prisma.order.findUniqueOrThrow({
+      where: { id: orderId },
+    });
+    if (
+      order.status !== OrderStatus.CREATED &&
+      order.status !== OrderStatus.ACCEPTED
+    ) {
+      throw new Error(`cannot edit order ${orderId} in status ${order.status}`);
+    }
+    const prices = await this.pricingSettings.getCurrent();
+    const totalPrice = this.pricing.calculateTotal(
+      bottles,
+      order.isFirstOrder,
+      prices,
+    );
+    return this.prisma.order.update({
+      where: { id: orderId },
+      data: { bottles, totalPrice },
+      include: { client: true, address: true },
+    });
+  }
+
   /** CREATED → ACCEPTED (SPEC §7). */
   async acceptOrder(id: string): Promise<Order> {
     const order = await this.transition(

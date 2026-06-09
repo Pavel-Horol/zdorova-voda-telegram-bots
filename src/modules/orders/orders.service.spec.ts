@@ -277,4 +277,51 @@ describe('OrdersService', () => {
       });
     });
   });
+
+  describe('editQuantity (правка диспетчером)', () => {
+    it('пересчитывает сумму повторного заказа (3 бутыли → 210) и обновляет', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue({
+        id: 'o1',
+        status: 'CREATED',
+        isFirstOrder: false,
+      });
+      prisma.order.update.mockResolvedValue({ id: 'o1', bottles: 3 });
+
+      await service.editQuantity('o1', 3);
+
+      expect(prisma.order.update).toHaveBeenCalledWith({
+        where: { id: 'o1' },
+        data: { bottles: 3, totalPrice: 210 },
+        include: { client: true, address: true },
+      });
+    });
+
+    it('первый заказ пересчитывается по стартовой сетке (2 → 800)', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue({
+        id: 'o1',
+        status: 'ACCEPTED',
+        isFirstOrder: true,
+      });
+      prisma.order.update.mockResolvedValue({ id: 'o1' });
+
+      await service.editQuantity('o1', 2);
+
+      expect(prisma.order.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: { bottles: 2, totalPrice: 800 },
+        }),
+      );
+    });
+
+    it('доставленный заказ менять нельзя', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue({
+        id: 'o1',
+        status: 'DELIVERED',
+        isFirstOrder: false,
+      });
+
+      await expect(service.editQuantity('o1', 3)).rejects.toThrow();
+      expect(prisma.order.update).not.toHaveBeenCalled();
+    });
+  });
 });

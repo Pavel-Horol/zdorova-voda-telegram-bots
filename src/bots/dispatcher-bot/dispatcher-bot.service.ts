@@ -7,7 +7,10 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Keyboard, session } from 'grammy';
-import { OrdersService } from '../../modules/orders/orders.service';
+import {
+  OrdersService,
+  type OrderWithRelations,
+} from '../../modules/orders/orders.service';
 import {
   PricingSettingsService,
   type EditablePriceField,
@@ -23,6 +26,7 @@ import {
   dispatcherCommands,
   dispatcherHelp,
   dispatcherWelcome,
+  editQuantityPrompt,
   noActiveOrders,
   orderKeyboard,
   orderMessage,
@@ -31,6 +35,9 @@ import {
   pricesMessage,
   statsMessage,
 } from './dispatcher-bot.texts';
+
+/** Потолок количества при правке заказа — защита от опечатки (диспетчер доверенный). */
+const MAX_EDIT_QTY = 100;
 
 // Подписи reply-кнопок постоянного меню (они же — ключи текстового роутера).
 const BTN_ORDERS = '📋 Активные';
@@ -117,6 +124,7 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
     bot.callbackQuery(/^acc:(.+)$/, (ctx) => this.onTransition(ctx, 'accept'));
     bot.callbackQuery(/^del:(.+)$/, (ctx) => this.onTransition(ctx, 'deliver'));
     bot.callbackQuery(/^can:(.+)$/, (ctx) => this.onTransition(ctx, 'cancel'));
+    bot.callbackQuery(/^edit:(.+)$/, (ctx) => this.onEditOrder(ctx));
     bot.callbackQuery(
       /^pe:(price1|price2|price3plus|depositPerBottle|pumpPrice)$/,
       (ctx) => this.onPickPriceField(ctx),
@@ -196,8 +204,9 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
   /** /prices — текущие цены + кнопки выбора поля для редактирования. */
   private async onPrices(ctx: DispatcherContext): Promise<void> {
     // Сбрасываем незавершённое редактирование: повторный вход в /prices отменяет
-    // ожидание ввода числа (иначе следующее число ушло бы в прошлое поле).
+    // ожидание ввода (иначе следующее число ушло бы в прошлое поле/заказ).
     ctx.session.editingPriceField = undefined;
+    ctx.session.editingOrderId = undefined;
     const prices = await this.pricingSettings.getCurrent();
     await ctx.reply(pricesMessage(prices), { reply_markup: pricesKeyboard() });
   }
@@ -207,10 +216,21 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
     await ctx.answerCallbackQuery();
     const field = ctx.match?.[1] as EditablePriceField | undefined;
     if (!field) return;
+    ctx.session.editingOrderId = undefined; // режимы ввода взаимоисключающие
     ctx.session.editingPriceField = field;
     await ctx.reply(
       `Введите новое значение для «${priceFieldLabel(field)}» (целое число грн):`,
     );
+  }
+
+  /** «✏️ Изменить»: запоминаем заказ и ждём новое количество бутылей текстом. */
+  private async onEditOrder(ctx: DispatcherContext): Promise<void> {
+    await ctx.answerCallbackQuery();
+    const id = ctx.match?.[1];
+    if (!id) return;
+    ctx.session.editingPriceField = undefined; // режимы ввода взаимоисключающие
+    ctx.session.editingOrderId = id;
+    await ctx.reply(editQuantityPrompt(id));
   }
 
   /**
@@ -234,6 +254,12 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
       return;
     }
 
+    // Ввод нового количества для заказа (✏️ Изменить) — приоритет над ценой.
+    if (ctx.session.editingOrderId) {
+      await this.applyEditedQuantity(ctx, ctx.session.editingOrderId, text);
+      return;
+    }
+
     const field = ctx.session.editingPriceField;
     if (!field) return;
     const value = Number(text);
@@ -247,6 +273,35 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
     await ctx.reply(`Сохранено ✅\n\n${pricesMessage(updated)}`, {
       reply_markup: pricesKeyboard(),
     });
+  }
+
+  /** Парсит количество и применяет правку заказа; на ошибке — ждём повторно. */
+  private async applyEditedQuantity(
+    ctx: DispatcherContext,
+    orderId: string,
+    text: string,
+  ): Promise<void> {
+    const bottles = Number(text);
+    if (!Number.isInteger(bottles) || bottles < 1 || bottles > MAX_EDIT_QTY) {
+      await ctx.reply(
+        `Нужно целое число от 1 до ${MAX_EDIT_QTY}. Попробуйте ещё раз.`,
+      );
+      return;
+    }
+    let view: OrderWithRelations;
+    try {
+      view = await this.orders.editQuantity(orderId, bottles);
+    } catch {
+      // Заказ уже доставлен/отменён/удалён — правка недоступна.
+      ctx.session.editingOrderId = undefined;
+      await ctx.reply('Этот заказ уже нельзя изменить.');
+      return;
+    }
+    ctx.session.editingOrderId = undefined;
+    await ctx.reply(
+      `Изменено ✅\n\n${orderMessage(view, view.client, view.address)}`,
+      { reply_markup: orderKeyboard(view.id, view.status) },
+    );
   }
 
   /** /stats — сводка за сегодня и за неделю (SPEC §7). */

@@ -6,9 +6,14 @@ import type { EditablePriceField } from '../../modules/pricing-settings/pricing-
 /** DI-токен общего инстанса диспетчерского бота. */
 export const DISPATCHER_BOT = Symbol('DISPATCHER_BOT');
 
-/** Сессия диспетчера: какое поле цены сейчас редактируется (flow /prices). */
+/**
+ * Сессия диспетчера. Два режима текстового ввода, взаимоисключающие:
+ * редактирование цены (/prices) и редактирование количества в заказе (✏️).
+ */
 export interface DispatcherSession {
   editingPriceField?: EditablePriceField;
+  /** id заказа, для которого ждём новое количество бутылей (flow ✏️ Изменить). */
+  editingOrderId?: string;
 }
 
 export type DispatcherContext = Context & SessionFlavor<DispatcherSession>;

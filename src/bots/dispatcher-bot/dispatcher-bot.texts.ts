@@ -64,6 +64,11 @@ export function statsMessage(stats: {
 /** Активных заказов нет (/orders). */
 export const noActiveOrders = 'Активных заказов нет 👍';
 
+/** Запрос нового количества бутылей при правке заказа (✏️ Изменить). */
+export function editQuantityPrompt(orderId: string): string {
+  return `✏️ Заказ #${orderId.slice(0, 8)}: введите новое количество бутылей.`;
+}
+
 /** Справка по командам (/help). */
 export const dispatcherHelp =
   'Что умеет бот:\n' +
@@ -127,11 +132,15 @@ export function orderKeyboard(
     case OrderStatus.CREATED:
       return new InlineKeyboard()
         .text('✅ Принят', `acc:${orderId}`)
-        .text('❌ Отменить', `can:${orderId}`);
+        .text('❌ Отменить', `can:${orderId}`)
+        .row()
+        .text('✏️ Изменить', `edit:${orderId}`);
     case OrderStatus.ACCEPTED:
       return new InlineKeyboard()
         .text('🚚 Доставлен', `del:${orderId}`)
-        .text('❌ Отменить', `can:${orderId}`);
+        .text('❌ Отменить', `can:${orderId}`)
+        .row()
+        .text('✏️ Изменить', `edit:${orderId}`);
     default:
       return undefined;
   }
