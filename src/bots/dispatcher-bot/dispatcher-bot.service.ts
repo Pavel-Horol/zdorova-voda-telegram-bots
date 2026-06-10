@@ -36,14 +36,17 @@ import {
   pricesMessage,
   statsMessage,
 } from './dispatcher-bot.texts';
+import {
+  BTN_ORDERS,
+  BTN_PRICES,
+  BTN_STATS,
+  parseEditedQuantity,
+  parsePriceValue,
+  routeDispatcherText,
+} from './dispatcher-bot.fsm';
 
 /** Потолок количества при правке заказа — защита от опечатки (диспетчер доверенный). */
 const MAX_EDIT_QTY = 100;
-
-// Подписи reply-кнопок постоянного меню (они же — ключи текстового роутера).
-const BTN_ORDERS = '📋 Активные';
-const BTN_PRICES = '💰 Цены';
-const BTN_STATS = '📊 Статистика';
 
 /** Постоянное reply-меню диспетчера — всегда внизу экрана (по образцу клиента). */
 const dispatcherMenuKeyboard = new Keyboard()
@@ -253,38 +256,38 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
     const text = ctx.message?.text?.trim();
     if (!text) return;
 
-    if (text === BTN_ORDERS) {
-      await this.onActiveOrders(ctx);
-      return;
+    const intent = routeDispatcherText(text, ctx.session);
+    switch (intent.kind) {
+      case 'menu':
+        if (intent.action === 'orders') await this.onActiveOrders(ctx);
+        else if (intent.action === 'prices') await this.onPrices(ctx);
+        else await this.onStats(ctx);
+        return;
+      case 'edit-quantity':
+        // Ввод нового количества для заказа (✏️ Изменить) — приоритет над ценой.
+        await this.applyEditedQuantity(ctx, intent.orderId, text);
+        return;
+      case 'edit-price': {
+        const parsed = parsePriceValue(text);
+        if (!parsed.ok) {
+          await ctx.reply(
+            'Нужно целое неотрицательное число. Попробуйте ещё раз.',
+          );
+          return;
+        }
+        const updated = await this.pricingSettings.update(
+          intent.field,
+          parsed.value,
+        );
+        ctx.session.editingPriceField = undefined;
+        await ctx.reply(`Сохранено ✅\n\n${pricesMessage(updated)}`, {
+          reply_markup: pricesKeyboard(),
+        });
+        return;
+      }
+      case 'ignore':
+        return;
     }
-    if (text === BTN_PRICES) {
-      await this.onPrices(ctx);
-      return;
-    }
-    if (text === BTN_STATS) {
-      await this.onStats(ctx);
-      return;
-    }
-
-    // Ввод нового количества для заказа (✏️ Изменить) — приоритет над ценой.
-    if (ctx.session.editingOrderId) {
-      await this.applyEditedQuantity(ctx, ctx.session.editingOrderId, text);
-      return;
-    }
-
-    const field = ctx.session.editingPriceField;
-    if (!field) return;
-    const value = Number(text);
-    if (!Number.isInteger(value) || value < 0) {
-      await ctx.reply('Нужно целое неотрицательное число. Попробуйте ещё раз.');
-      return;
-    }
-
-    const updated = await this.pricingSettings.update(field, value);
-    ctx.session.editingPriceField = undefined;
-    await ctx.reply(`Сохранено ✅\n\n${pricesMessage(updated)}`, {
-      reply_markup: pricesKeyboard(),
-    });
   }
 
   /** Парсит количество и применяет правку заказа; на ошибке — ждём повторно. */
@@ -293,8 +296,8 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
     orderId: string,
     text: string,
   ): Promise<void> {
-    const bottles = Number(text);
-    if (!Number.isInteger(bottles) || bottles < 1 || bottles > MAX_EDIT_QTY) {
+    const parsed = parseEditedQuantity(text, MAX_EDIT_QTY);
+    if (!parsed.ok) {
       await ctx.reply(
         `Нужно целое число от 1 до ${MAX_EDIT_QTY}. Попробуйте ещё раз.`,
       );
@@ -302,7 +305,7 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
     }
     let view: OrderWithRelations;
     try {
-      view = await this.orders.editQuantity(orderId, bottles);
+      view = await this.orders.editQuantity(orderId, parsed.value);
     } catch {
       // Заказ уже доставлен/отменён/удалён — правка недоступна.
       ctx.session.editingOrderId = undefined;
