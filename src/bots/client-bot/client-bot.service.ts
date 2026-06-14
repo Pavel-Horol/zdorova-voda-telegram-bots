@@ -31,6 +31,7 @@ import {
   resolveBack,
   resolveConfirm,
   resolveFinalizeAddress,
+  resolveStartOrder,
   Step,
   type ScreenIntent,
 } from './client-bot.fsm';
@@ -357,8 +358,10 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * «Заказать воду»: глобальный вход в сценарий. Сбрасывает прошлый флоу,
-   * затем — нет адреса → собираем (первый заказ), есть → к выбору количества.
+   * «Заказать воду»: глобальный вход в сценарий. Сбрасывает прошлый флоу, затем по
+   * {@link resolveStartOrder}: нет адреса → собираем (первый заказ); есть адрес и
+   * прошлый заказ → сразу подтверждение с прошлым количеством (повтор в один тап);
+   * есть адрес, но заказов не было → выбор количества.
    */
   private async startOrder(ctx: BotContext): Promise<void> {
     const client = await this.requireClient(ctx);
@@ -368,11 +371,17 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
     ctx.session.history = [Step.MainMenu];
 
     const address = await this.clients.getDefaultAddress(client.id);
-    if (!address) {
-      await this.renderAddressPrompt(ctx);
-      return;
+    const lastBottles = address
+      ? await this.orders.lastBottles(client.id)
+      : null;
+    const intent = resolveStartOrder(address !== null, lastBottles);
+    if (intent.kind === 'confirm') {
+      // Подставляем прошлое количество и подталкиваем историю шагом выбора
+      // количества, чтобы «✏️ Изменить» (= «Назад») вёл к нему, а не в меню.
+      ctx.session.bottles = intent.bottles;
+      this.pushHistory(ctx, Step.ChooseQty);
     }
-    await this.renderChooseQty(ctx, client.id);
+    await this.renderScreen(ctx, intent, { client, address });
   }
 
   /**

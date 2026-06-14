@@ -28,10 +28,12 @@ export interface OrderQuote {
   totalPrice: number;
   /** Цена за бутыль — только для повторного заказа (для текста «N × цена»). */
   perBottle: number | null;
-  /** Залог за бутыль — для текста первого заказа. */
+  /** Залог за бак — для разбивки стартового комплекта. */
   depositPerBottle: number;
-  /** Цена помпы — для текста первого заказа. */
+  /** Цена помпы — для разбивки стартового комплекта. */
   pumpPrice: number;
+  /** Старт-вода за бак — для разбивки стартового комплекта. */
+  waterStartPrice: number;
 }
 
 /**
@@ -198,6 +200,7 @@ export class OrdersService {
       perBottle: isFirstOrder ? null : totalPrice / bottles,
       depositPerBottle: prices.depositPerBottle,
       pumpPrice: prices.pumpPrice,
+      waterStartPrice: prices.waterStartPrice,
     };
   }
 

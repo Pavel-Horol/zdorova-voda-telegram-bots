@@ -12,10 +12,12 @@ jest.mock('../../prisma/prisma.service', () => ({ PrismaService: class {} }));
 const prices = {
   id: 1,
   price1: 80,
-  price2: 75,
-  price3plus: 70,
-  depositPerBottle: 300,
-  pumpPrice: 200,
+  priceFrom2: 70,
+  priceFrom6: 65,
+  depositPerBottle: 450,
+  pumpPrice: 250,
+  electroPumpPrice: 270,
+  waterStartPrice: 50,
   updatedAt: new Date('2026-05-30T00:00:00.000Z'),
 };
 
@@ -93,8 +95,8 @@ describe('OrdersService', () => {
   // возвращаемый сервисом Order приходит из сгенерированного клиента и в контексте
   // юнит-теста выводится как any, поэтому assertions строим на аргументах вызовов.
   describe('createOrder', () => {
-    it('первый заказ: isFirstOrder=true, сумма по стартовой сетке (1 бутыль → 500)', async () => {
-      const created = { id: 'o1', isFirstOrder: true, totalPrice: 500 };
+    it('первый заказ: isFirstOrder=true, сумма по стартовому комплекту (1 бак → 750)', async () => {
+      const created = { id: 'o1', isFirstOrder: true, totalPrice: 750 };
       prisma.order.count.mockResolvedValue(0);
       prisma.order.create.mockResolvedValue(created);
 
@@ -109,7 +111,7 @@ describe('OrdersService', () => {
           addressId: 'a1',
           bottles: 1,
           isFirstOrder: true,
-          totalPrice: 500,
+          totalPrice: 750,
           status: 'CREATED',
         },
       });
@@ -120,8 +122,8 @@ describe('OrdersService', () => {
       );
     });
 
-    it('повторный заказ: isFirstOrder=false, сумма по обычной сетке (2 бутыли → 150)', async () => {
-      const created = { id: 'o2', isFirstOrder: false, totalPrice: 150 };
+    it('повторный заказ: isFirstOrder=false, сумма по сетке воды (2 бутыли → 140)', async () => {
+      const created = { id: 'o2', isFirstOrder: false, totalPrice: 140 };
       prisma.order.count.mockResolvedValue(3); // есть прошлые активные заказы
       prisma.order.create.mockResolvedValue(created);
 
@@ -133,7 +135,7 @@ describe('OrdersService', () => {
           addressId: 'a1',
           bottles: 2,
           isFirstOrder: false,
-          totalPrice: 150,
+          totalPrice: 140,
           status: 'CREATED',
         },
       });
@@ -296,7 +298,7 @@ describe('OrdersService', () => {
       });
     });
 
-    it('первый заказ пересчитывается по стартовой сетке (2 → 800)', async () => {
+    it('первый заказ пересчитывается по стартовому комплекту (2 → 1250)', async () => {
       prisma.order.findUniqueOrThrow.mockResolvedValue({
         id: 'o1',
         status: 'ACCEPTED',
@@ -308,7 +310,7 @@ describe('OrdersService', () => {
 
       expect(prisma.order.update).toHaveBeenCalledWith(
         expect.objectContaining({
-          data: { bottles: 2, totalPrice: 800 },
+          data: { bottles: 2, totalPrice: 1250 },
         }),
       );
     });

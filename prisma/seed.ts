@@ -19,10 +19,12 @@ async function main(): Promise<void> {
     create: {
       id: 1,
       price1: 80,
-      price2: 75,
-      price3plus: 70,
-      depositPerBottle: 300,
-      pumpPrice: 200,
+      priceFrom2: 70,
+      priceFrom6: 65,
+      depositPerBottle: 450,
+      pumpPrice: 250,
+      electroPumpPrice: 270,
+      waterStartPrice: 50,
     },
   });
 

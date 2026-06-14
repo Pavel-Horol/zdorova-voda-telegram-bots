@@ -6,19 +6,20 @@ import { Injectable } from '@nestjs/common';
  */
 export interface PriceList {
   price1: number;
-  price2: number;
-  price3plus: number;
+  priceFrom2: number;
+  priceFrom6: number;
   depositPerBottle: number;
   pumpPrice: number;
+  waterStartPrice: number;
 }
 
 @Injectable()
 export class PricingService {
   /**
-   * Считает итоговую сумму заказа.
+   * Считает итоговую сумму заказа (PRODUCT.md «Расчёт суммы»).
    *
-   * Первый заказ (SPEC §3.2): bottles × depositPerBottle + pumpPrice (вода бесплатно).
-   * Повторный (SPEC §3.1): bottles × цена-за-бутыль по сетке 1 / 2 / 3+.
+   * Первый заказ — стартовый комплект (раскладка): bottles × залог + помпа +
+   * bottles × старт-вода. Повторный — bottles × цена по сетке воды 1 / от 2 / от 6.
    *
    * @throws Error если bottles не целое положительное число (0 бутылей — не заказ).
    */
@@ -32,16 +33,20 @@ export class PricingService {
     }
 
     if (isFirstOrder) {
-      return bottles * prices.depositPerBottle + prices.pumpPrice;
+      return (
+        bottles * prices.depositPerBottle +
+        prices.pumpPrice +
+        bottles * prices.waterStartPrice
+      );
     }
 
     let perBottle: number;
     if (bottles === 1) {
       perBottle = prices.price1;
-    } else if (bottles === 2) {
-      perBottle = prices.price2;
+    } else if (bottles < 6) {
+      perBottle = prices.priceFrom2;
     } else {
-      perBottle = prices.price3plus;
+      perBottle = prices.priceFrom6;
     }
 
     return bottles * perBottle;

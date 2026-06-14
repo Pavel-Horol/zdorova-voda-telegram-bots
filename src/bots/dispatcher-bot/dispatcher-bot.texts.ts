@@ -16,11 +16,13 @@ const STATUS_HEADER: Record<OrderStatus, string> = {
 };
 
 const PRICE_FIELD_LABEL: Record<EditablePriceField, string> = {
-  price1: 'Цена за 1 бутыль',
-  price2: 'Цена за 2 бутыли',
-  price3plus: 'Цена за 3+ бутыли',
-  depositPerBottle: 'Залог за бутыль',
+  price1: 'Вода: 1 бутыль',
+  priceFrom2: 'Вода: от 2',
+  priceFrom6: 'Вода: от 6',
+  depositPerBottle: 'Залог за бак',
   pumpPrice: 'Помпа',
+  electroPumpPrice: 'Помпа электро',
+  waterStartPrice: 'Старт-вода',
 };
 
 export function priceFieldLabel(field: EditablePriceField): string {
@@ -159,11 +161,10 @@ export function clientCancelledMessage(order: Order, client: Client): string {
 export function pricesMessage(prices: PriceSettings): string {
   return (
     'Текущие цены:\n' +
-    `1 бутыль: ${prices.price1} грн\n` +
-    `2 бутыли: ${prices.price2} грн\n` +
-    `3+ бутылей: ${prices.price3plus} грн\n` +
-    `Залог за бутыль: ${prices.depositPerBottle} грн\n` +
-    `Помпа: ${prices.pumpPrice} грн`
+    `Вода: 1 — ${prices.price1}, от 2 — ${prices.priceFrom2}, от 6 — ${prices.priceFrom6} грн\n` +
+    `Залог за бак: ${prices.depositPerBottle} грн\n` +
+    `Помпа: ${prices.pumpPrice} грн (электро ${prices.electroPumpPrice})\n` +
+    `Старт-вода: ${prices.waterStartPrice} грн/бак`
   );
 }
 
@@ -175,10 +176,13 @@ export function priceEditCancelKeyboard(): InlineKeyboard {
 /** Кнопки выбора поля цены для редактирования (SPEC §7). */
 export function pricesKeyboard(): InlineKeyboard {
   return new InlineKeyboard()
-    .text('Цена 1', 'pe:price1')
-    .text('Цена 2', 'pe:price2')
-    .text('Цена 3+', 'pe:price3plus')
+    .text('Вода 1', 'pe:price1')
+    .text('Вода от2', 'pe:priceFrom2')
+    .text('Вода от6', 'pe:priceFrom6')
     .row()
     .text('Залог', 'pe:depositPerBottle')
-    .text('Помпа', 'pe:pumpPrice');
+    .text('Помпа', 'pe:pumpPrice')
+    .text('Помпа эл', 'pe:electroPumpPrice')
+    .row()
+    .text('Старт-вода', 'pe:waterStartPrice');
 }

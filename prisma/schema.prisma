@@ -1,6 +1,6 @@
 // This is your Prisma schema file,
 // learn more about it in the docs: https://pris.ly/d/prisma-schema
-// Модель данных — SPEC.md §4. Расчёт цены — SPEC.md §5 (только в pricing.service).
+// Модель данных и расчёт цены — PRODUCT.md (расчёт суммы — только в pricing.service).
 
 generator client {
   provider     = "prisma-client"
@@ -57,7 +57,7 @@ model Order {
   clientId     String
   addressId    String
   bottles      Int
-  /// true → сумма считалась по стартовой сетке (залог + помпа), SPEC §3.2.
+  /// true → сумма по стартовому комплекту (залог + помпа + старт-вода), PRODUCT.md.
   isFirstOrder Boolean
   /// Зафиксированная сумма заказа в гривнах (целое, без копеек).
   totalPrice   Int
@@ -74,13 +74,17 @@ model Order {
 }
 
 /// Настройки цен — синглтон (одна строка на всю систему).
-/// id всегда = 1; сид создаёт строку с дефолтами (SPEC §3, §4).
+/// id всегда = 1; сид создаёт строку с дефолтами (PRODUCT.md «Ценообразование»).
 model PriceSettings {
   id               Int      @id @default(1)
+  /// Сетка воды (город) по количеству: 1 / от 2 / от 6.
   price1           Int      @default(80)
-  price2           Int      @default(75)
-  price3plus       Int      @default(70)
-  depositPerBottle Int      @default(300)
-  pumpPrice        Int      @default(200)
+  priceFrom2       Int      @default(70)
+  priceFrom6       Int      @default(65)
+  /// Компоненты стартового комплекта и докупки: залог, помпа, электро-помпа, старт-вода.
+  depositPerBottle Int      @default(450)
+  pumpPrice        Int      @default(250)
+  electroPumpPrice Int      @default(270)
+  waterStartPrice  Int      @default(50)
   updatedAt        DateTime @updatedAt
 }

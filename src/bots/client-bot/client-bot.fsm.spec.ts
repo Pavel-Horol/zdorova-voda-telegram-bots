@@ -5,6 +5,7 @@ import {
   resolveBack,
   resolveConfirm,
   resolveFinalizeAddress,
+  resolveStartOrder,
   Step,
 } from './client-bot.fsm';
 
@@ -96,6 +97,26 @@ describe('parseQty', () => {
  * Юнит-тесты переходов, перенесённых из хендлеров (onChooseQty / finalizeAddress
  * / renderConfirm). Поведение тождественно исходным веткам в сервисе.
  */
+describe('resolveStartOrder (из startOrder)', () => {
+  it('адреса нет → промпт адреса (первый заказ), вне зависимости от прошлого заказа', () => {
+    expect(resolveStartOrder(false, null)).toEqual({ kind: 'address-prompt' });
+    expect(resolveStartOrder(false, 3)).toEqual({ kind: 'address-prompt' });
+  });
+
+  it('адрес есть и был прошлый заказ → confirm с прошлым количеством (повтор в один тап)', () => {
+    expect(resolveStartOrder(true, 3)).toEqual({ kind: 'confirm', bottles: 3 });
+    expect(resolveStartOrder(true, MAX_ORDER_QTY)).toEqual({
+      kind: 'confirm',
+      bottles: MAX_ORDER_QTY,
+    });
+  });
+
+  it('адрес есть, заказов не было (null/0) → выбор количества', () => {
+    expect(resolveStartOrder(true, null)).toEqual({ kind: 'choose-qty' });
+    expect(resolveStartOrder(true, 0)).toEqual({ kind: 'choose-qty' });
+  });
+});
+
 describe('resolveAfterQty (из onChooseQty)', () => {
   it('адрес есть → confirm с тем же количеством', () => {
     expect(resolveAfterQty(3, true)).toEqual({ kind: 'confirm', bottles: 3 });

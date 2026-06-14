@@ -6,10 +6,12 @@ const PRICE_SETTINGS_ID = 1;
 
 export type EditablePriceField =
   | 'price1'
-  | 'price2'
-  | 'price3plus'
+  | 'priceFrom2'
+  | 'priceFrom6'
   | 'depositPerBottle'
-  | 'pumpPrice';
+  | 'pumpPrice'
+  | 'electroPumpPrice'
+  | 'waterStartPrice';
 
 @Injectable()
 export class PricingSettingsService {

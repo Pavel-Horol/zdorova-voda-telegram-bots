@@ -66,14 +66,14 @@ export const texts = {
 
   /**
    * CONFIRM (SPEC §6) — структурированный итог перед созданием заказа.
-   * Ветка по quote.isFirstOrder: первый заказ показывает разбивку залог+помпа,
-   * повторный — цену за бутыль. Адрес — raw + comment в скобках (если задан).
+   * Ветка по quote.isFirstOrder: первый заказ показывает разбивку стартового
+   * комплекта, повторный — цену за бутыль. Адрес — raw + comment в скобках.
    */
   confirm(quote: OrderQuote, address: Address): string {
     const word = bottlesWord(quote.bottles);
     const breakdown = quote.isFirstOrder
-      ? `залог ${quote.bottles}×${quote.depositPerBottle} + ` +
-        `помпа ${quote.pumpPrice}, вода бесплатно`
+      ? `стартовый комплект: залог ${quote.bottles}×${quote.depositPerBottle} + ` +
+        `помпа ${quote.pumpPrice} + вода ${quote.bottles}×${quote.waterStartPrice}`
       : `по ${quote.perBottle ?? 0} грн`;
     const comment = address.comment ? ` (${address.comment})` : '';
     return (
@@ -135,11 +135,11 @@ export const texts = {
     return (
       '💰 Наши цены (бутыль 19 л):\n' +
       `• 1 бутыль — ${p.price1} грн\n` +
-      `• 2 бутыли — ${p.price2} грн/шт\n` +
-      `• 3+ бутылей — ${p.price3plus} грн/шт\n\n` +
+      `• от 2 — ${p.priceFrom2} грн/шт\n` +
+      `• от 6 — ${p.priceFrom6} грн/шт\n\n` +
       'Первый заказ (стартовый комплект):\n' +
-      `• залог ${p.depositPerBottle} грн/бутыль + помпа ${p.pumpPrice} грн\n` +
-      '• вода — бесплатно\n\n' +
+      `• залог ${p.depositPerBottle} грн/бак + помпа ${p.pumpPrice} грн ` +
+      `+ старт-вода ${p.waterStartPrice} грн/бак\n\n` +
       'Оплата наличными водителю.'
     );
   },

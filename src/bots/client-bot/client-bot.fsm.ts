@@ -106,6 +106,28 @@ export function resolveBack(
 // запись сессии) — тоже в хендлере. Здесь только РЕШЕНИЕ «какой экран».
 
 /**
+ * Переход на входе в сценарий заказа («Заказать воду», из `startOrder`). На вход —
+ * наличие default-адреса и количество последнего не-отменённого заказа (грузит
+ * хендлер). Решает:
+ * - адреса нет → собрать адрес (первый заказ);
+ * - адрес есть и был прошлый заказ → сразу подтверждение с прошлым количеством
+ *   (повтор в один тап; «Изменить» уводит к выбору количества);
+ * - адрес есть, но заказов ещё не было → выбор количества.
+ * `!lastBottles` ловит и `null`, и `0`.
+ */
+export function resolveStartOrder(
+  hasDefaultAddress: boolean,
+  lastBottles: number | null,
+): Extract<
+  ScreenIntent,
+  { kind: 'address-prompt' | 'choose-qty' | 'confirm' }
+> {
+  if (!hasDefaultAddress) return { kind: 'address-prompt' };
+  if (!lastBottles) return { kind: 'choose-qty' };
+  return { kind: 'confirm', bottles: lastBottles };
+}
+
+/**
  * Переход после выбора количества (из `onChooseQty`). На вход — валидированное
  * `bottles` (см. {@link parseQty}) и признак наличия default-адреса. Решает:
  * адреса нет → собрать адрес (первый заказ); есть → к подтверждению с этим кол-вом.

@@ -1,12 +1,13 @@
 import { PricingService, PriceList } from './pricing.service';
 
-// Дефолтные цены (совпадают с сидом PriceSettings, SPEC §3).
+// Дефолтные цены (совпадают с сидом PriceSettings, PRODUCT.md).
 const prices: PriceList = {
   price1: 80,
-  price2: 75,
-  price3plus: 70,
-  depositPerBottle: 300,
-  pumpPrice: 200,
+  priceFrom2: 70,
+  priceFrom6: 65,
+  depositPerBottle: 450,
+  pumpPrice: 250,
+  waterStartPrice: 50,
 };
 
 describe('PricingService.calculateTotal', () => {
@@ -16,22 +17,24 @@ describe('PricingService.calculateTotal', () => {
     service = new PricingService();
   });
 
-  describe('повторный заказ (SPEC §3.1)', () => {
+  describe('повторный заказ — сетка воды 1 / от 2 / от 6', () => {
     it.each([
       [1, 80],
-      [2, 150],
+      [2, 140],
       [3, 210],
       [5, 350],
+      [6, 390],
+      [7, 455],
     ])('%i бутыл(ей) → %i грн', (bottles, expected) => {
       expect(service.calculateTotal(bottles, false, prices)).toBe(expected);
     });
   });
 
-  describe('первый заказ (SPEC §3.2)', () => {
+  describe('первый заказ — стартовый комплект (залог+помпа+старт-вода)', () => {
     it.each([
-      [1, 500],
-      [2, 800],
-      [3, 1100],
+      [1, 750],
+      [2, 1250],
+      [3, 1750],
     ])('%i бутыл(ей) → %i грн', (bottles, expected) => {
       expect(service.calculateTotal(bottles, true, prices)).toBe(expected);
     });

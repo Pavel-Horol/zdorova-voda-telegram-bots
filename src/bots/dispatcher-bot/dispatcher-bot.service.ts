@@ -131,7 +131,7 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
     bot.callbackQuery(/^edit:(.+)$/, (ctx) => this.onEditOrder(ctx));
     bot.callbackQuery('pe_cancel', (ctx) => this.onCancelPriceEdit(ctx));
     bot.callbackQuery(
-      /^pe:(price1|price2|price3plus|depositPerBottle|pumpPrice)$/,
+      /^pe:(price1|priceFrom2|priceFrom6|depositPerBottle|pumpPrice|electroPumpPrice|waterStartPrice)$/,
       (ctx) => this.onPickPriceField(ctx),
     );
     // message:text — после команд, чтобы /prices и /stats не попадали сюда.
