@@ -21,10 +21,19 @@ import {
   ORDER_STATUS_CHANGED,
   type OrderStatusChangedEvent,
 } from '../../modules/orders/order-events';
-import type { Address, Order } from '../../../generated/prisma/client';
+import type { Address, Client, Order } from '../../../generated/prisma/client';
 import { OrderStatus } from '../../../generated/prisma/enums';
 import { texts } from './client-bot.texts';
-import { resolveBack, Step } from './client-bot.fsm';
+import {
+  assertNever,
+  parseQty,
+  resolveAfterQty,
+  resolveBack,
+  resolveConfirm,
+  resolveFinalizeAddress,
+  Step,
+  type ScreenIntent,
+} from './client-bot.fsm';
 
 /** Шаги активного сценария заказа — на них действует «Назад»/«Отмена» (SPEC §6). */
 const ORDER_FLOW_STEPS: readonly Step[] = [
@@ -72,13 +81,6 @@ const BTN_CONTACTS = '📞 Связаться';
 
 /** Максимум бутылей кнопками (3+ всё равно идёт по одной цене, SPEC §3.1). */
 const MAX_QTY = 5;
-
-/**
- * Верхняя граница объёма заказа. Кнопки дают максимум MAX_QTY (или повтор
- * реального прошлого заказа), так что больше — это подделанный callback. Защита
- * от абсурдных сумм; реальные большие заказы — звонком диспетчеру (SPEC §1).
- */
-const MAX_ORDER_QTY = 100;
 
 const contactKeyboard = new Keyboard()
   .requestContact('📱 Поделиться номером')
@@ -343,14 +345,15 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
     const client = await this.requireClient(ctx);
     if (!client) return;
     const raw = ctx.session.addressRaw;
-    if (!raw) {
-      await this.renderAddressPrompt(ctx);
-      return;
+    const intent = resolveFinalizeAddress(raw);
+    if (intent.kind === 'choose-qty') {
+      // upsert, а не create: повторный проход шага («Назад») не плодит дубли.
+      // raw заведомо задан (choose-qty ⇒ !!raw) — guard для нарроуинга.
+      if (raw)
+        await this.clients.setDefaultAddress(client.id, { raw, comment });
+      this.pushHistory(ctx, Step.AwaitComment);
     }
-    // upsert, а не create: повторный проход шага (возврат «Назад») не плодит дубли.
-    await this.clients.setDefaultAddress(client.id, { raw, comment });
-    this.pushHistory(ctx, Step.AwaitComment);
-    await this.renderChooseQty(ctx, client.id);
+    await this.renderScreen(ctx, intent, { client });
   }
 
   /**
@@ -446,23 +449,19 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
   private async onChooseQty(ctx: BotContext): Promise<void> {
     await ctx.answerCallbackQuery();
     if (ctx.session.step !== Step.ChooseQty) return;
-    const bottles = Number(ctx.match?.[1]);
-    if (!Number.isInteger(bottles) || bottles < 1) return;
-    // Защита от подделанного callback'а (UI даёт максимум MAX_QTY/повтор реального
-    // заказа). Аномально большой объём — на телефон диспетчеру, не через бота.
-    if (bottles > MAX_ORDER_QTY) return;
+    // Валидация недоверенного callback'а (SPEC §7) — в чистой parseQty.
+    const bottles = parseQty(ctx.match?.[1] ?? '');
+    if (bottles === null) return;
 
     const client = await this.requireClient(ctx);
     if (!client) return;
     const address = await this.clients.getDefaultAddress(client.id);
-    if (!address) {
-      await this.renderAddressPrompt(ctx);
-      return;
+    const intent = resolveAfterQty(bottles, address !== null);
+    if (intent.kind === 'confirm') {
+      ctx.session.bottles = intent.bottles;
+      this.pushHistory(ctx, Step.ChooseQty);
     }
-
-    ctx.session.bottles = bottles;
-    this.pushHistory(ctx, Step.ChooseQty);
-    await this.renderConfirm(ctx, client.id, address);
+    await this.renderScreen(ctx, intent, { client, address });
   }
 
   /** Подтверждение заказа. Шаг уводится из Confirm сразу — защита от двойного тапа. */
@@ -491,7 +490,7 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
       await this.replyMenu(ctx, texts.orderError);
       return;
     }
-    await this.replyMenu(ctx, texts.orderDone);
+    await this.renderScreen(ctx, { kind: 'order-done' }, { client });
   }
 
   /** «Назад» (в т.ч. «Изменить» на Confirm): шаг назад по стеку истории. */
@@ -506,20 +505,18 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
       prev === Step.ChooseQty
         ? (await this.clients.getDefaultAddress(client.id)) !== null
         : false;
-    switch (resolveBack(prev, hasDefaultAddress)) {
-      case 'main-menu':
-        await this.showMainMenu(ctx, client.name);
-        return;
-      case 'address-prompt':
-        await this.renderAddressPrompt(ctx);
-        return;
-      case 'comment-prompt':
-        await this.renderCommentPrompt(ctx);
-        return;
-      case 'choose-qty':
-        await this.renderChooseQty(ctx, client.id);
-        return;
-    }
+    // resolveBack решает «куда», renderScreen — «как». BackTarget — подмножество
+    // ScreenIntent['kind']; адаптируем к интенту (main-menu несёт имя клиента).
+    const target = resolveBack(prev, hasDefaultAddress);
+    const intent: ScreenIntent =
+      target === 'main-menu'
+        ? { kind: 'main-menu', name: client.name }
+        : target === 'comment-prompt'
+          ? { kind: 'comment-prompt' }
+          : target === 'choose-qty'
+            ? { kind: 'choose-qty' }
+            : { kind: 'address-prompt' };
+    await this.renderScreen(ctx, intent, { client });
   }
 
   /** «Отмена»: выход из сценария заказа в главное меню. */
@@ -532,6 +529,53 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
   }
 
   // --- Render-хелперы экранов: ставят шаг и отрисовывают (SPEC §6) -----------
+
+  /**
+   * Единственная точка, где ScreenIntent превращается в реальный экран (SPEC §6).
+   * Исчерпывающий switch с `default: assertNever(intent)`: забытый при добавлении
+   * нового экран ловится компилятором, а не в рантайме. Данные, требующие
+   * async-загрузки (client, address), приходят готовыми в `deps` из хендлера —
+   * здесь только рендер, без походов в сервисы.
+   *
+   * `await-contact` также рендерится напрямую в onStart/requireClient (там клиента
+   * ещё нет) — случай оставлен здесь для полноты словаря и будущего роутинга.
+   */
+  private async renderScreen(
+    ctx: BotContext,
+    intent: ScreenIntent,
+    deps: { client: Client; address?: Address | null },
+  ): Promise<void> {
+    switch (intent.kind) {
+      case 'await-contact':
+        this.resetSession(ctx, Step.AwaitContact);
+        await this.replyMenu(ctx, texts.awaitContact, contactKeyboard);
+        return;
+      case 'main-menu':
+        await this.showMainMenu(ctx, intent.name);
+        return;
+      case 'address-prompt':
+        await this.renderAddressPrompt(ctx);
+        return;
+      case 'comment-prompt':
+        await this.renderCommentPrompt(ctx);
+        return;
+      case 'choose-qty':
+        await this.renderChooseQty(ctx, deps.client.id);
+        return;
+      case 'confirm':
+        // confirm возвращается только при наличии адреса (resolveAfterQty) —
+        // guard для нарроуинга Address | null → Address.
+        if (deps.address) {
+          await this.renderConfirm(ctx, deps.client.id, deps.address);
+        }
+        return;
+      case 'order-done':
+        await this.replyMenu(ctx, texts.orderDone);
+        return;
+      default:
+        assertNever(intent);
+    }
+  }
 
   private async showMainMenu(
     ctx: BotContext,
@@ -565,12 +609,12 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
     clientId: string,
     address: Address,
   ): Promise<void> {
-    const bottles = ctx.session.bottles;
-    if (!bottles) {
+    const intent = resolveConfirm(ctx.session.bottles);
+    if (intent.kind === 'choose-qty') {
       await this.renderChooseQty(ctx, clientId);
       return;
     }
-    const quote = await this.orders.quote(clientId, bottles);
+    const quote = await this.orders.quote(clientId, intent.bottles);
     ctx.session.step = Step.Confirm;
     await this.replyInline(ctx, texts.confirm(quote, address), confirmKeyboard);
   }

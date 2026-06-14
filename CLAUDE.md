@@ -43,7 +43,7 @@ src/
   modules/                   # бизнес-логика (доступ к БД — ТОЛЬКО здесь)
     clients/                 # клиенты + адреса (+ .spec)
     orders/                  # заказы, статусы; order-events.ts (событие смены статуса)
-      pricing.service.ts     # ЕДИНСТВЕННОЕ место расчёта суммы (+ .spec)
+    pricing/                 # pricing.service.ts — ЕДИНСТВЕННОЕ место расчёта суммы (+ .spec)
     pricing-settings/        # чтение/редактирование цен (+ .spec)
   bots/
     client-bot/
@@ -61,15 +61,26 @@ test/
 > Если встречаешь упоминание их в старых комментариях/доках — это устаревшее.
 
 ## Как устроен FSM клиентского бота (НЕ ломать)
-FSM **ручной**, поверх in-memory `session` grammY. Никакого плагина `conversations`,
-никаких scenes. Паттерн любого шага:
+FSM **ручной** (состояние — in-memory `session` grammY), но переходы **декларативны**.
+Никакого плагина `conversations`, никаких scenes. Паттерн любого шага:
 **проверь `step` (гард) → выполни действие → переведи `step` → погаси прошлую клаву.**
 
-- Состояние — `enum Step` в `SessionData` (`client-bot.service.ts`):
+- **Переходы описаны декларативно в `client-bot.fsm.ts`:** экраны — юнион
+  `ScreenIntent` (`{ kind, ...данные для рендера }`), «куда вести» решают чистые
+  функции-переходы (`resolveBack`, `resolveAfterQty`, `resolveConfirm`,
+  `resolveFinalizeAddress`) — без `ctx`/сервисов/async, покрыты юнит-тестами
+  (`client-bot.fsm.spec.ts`). Хендлер: загрузил данные → вызвал функцию → отдал
+  `ScreenIntent` в рендер. Ветвления «какой экран» в хендлерах быть НЕ должно.
+- **`renderScreen` — единственное место `ScreenIntent → реальный экран`** —
+  исчерпывающий `switch (intent.kind)` с `default: assertNever(intent)`. Забыл
+  обработать новый экран → **компилятор краснеет** (`TS2345 … type 'never'`), а не
+  падает в рантайме. Добавление экрана начинается с варианта в `ScreenIntent`.
+- Состояние — `enum Step` (в `client-bot.fsm.ts`), хранится в `SessionData`:
   `AwaitContact → MainMenu → AwaitAddress → AwaitComment → ChooseQty → Confirm`.
 - **Гард в каждом хендлере:** `if (ctx.session.step !== Step.X) return;`. Роутера
   состояний нет — проверки разбросаны по хендлерам, это сознательно.
-- **«Назад»** — ручной стек `history: Step[]` в сессии (push на входе в шаг, pop в `onBack`).
+- **«Назад»** — ручной стек `history: Step[]` в сессии (push на входе в шаг, pop в
+  `onBack`); `resolveBack` по снятому шагу решает целевой экран.
 - **Гашение клавиатур** — самое хрупкое место. Inline-экраны слать ТОЛЬКО через
   `replyInline` (гасит прошлую клаву, запоминает `activeInlineMessageId`); экраны
   с reply-меню — через `replyMenu` (гасит висящую inline-клаву). **Прямой
