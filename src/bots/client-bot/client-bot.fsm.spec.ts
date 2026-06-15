@@ -1,6 +1,10 @@
 import {
   MAX_ORDER_QTY,
+  parseOnboardingChoice,
+  parsePumpChoice,
   parseQty,
+  parseTaraCount,
+  parseYesNo,
   resolveAfterQty,
   resolveBack,
   resolveConfirm,
@@ -98,22 +102,93 @@ describe('parseQty', () => {
  * / renderConfirm). Поведение тождественно исходным веткам в сервисе.
  */
 describe('resolveStartOrder (из startOrder)', () => {
-  it('адреса нет → промпт адреса (первый заказ), вне зависимости от прошлого заказа', () => {
-    expect(resolveStartOrder(false, null)).toEqual({ kind: 'address-prompt' });
-    expect(resolveStartOrder(false, 3)).toEqual({ kind: 'address-prompt' });
+  it('новичок (needsOnboarding) → экран онбординга, раньше всех веток', () => {
+    expect(resolveStartOrder(false, null, true)).toEqual({
+      kind: 'onboarding',
+    });
+    // даже при наличии адреса/прошлого заказа онбординг имеет приоритет
+    expect(resolveStartOrder(true, 3, true)).toEqual({ kind: 'onboarding' });
+  });
+
+  it('адреса нет → промпт адреса (первый заказ)', () => {
+    expect(resolveStartOrder(false, null, false)).toEqual({
+      kind: 'address-prompt',
+    });
+    expect(resolveStartOrder(false, 3, false)).toEqual({
+      kind: 'address-prompt',
+    });
   });
 
   it('адрес есть и был прошлый заказ → confirm с прошлым количеством (повтор в один тап)', () => {
-    expect(resolveStartOrder(true, 3)).toEqual({ kind: 'confirm', bottles: 3 });
-    expect(resolveStartOrder(true, MAX_ORDER_QTY)).toEqual({
+    expect(resolveStartOrder(true, 3, false)).toEqual({
+      kind: 'confirm',
+      bottles: 3,
+    });
+    expect(resolveStartOrder(true, MAX_ORDER_QTY, false)).toEqual({
       kind: 'confirm',
       bottles: MAX_ORDER_QTY,
     });
   });
 
   it('адрес есть, заказов не было (null/0) → выбор количества', () => {
-    expect(resolveStartOrder(true, null)).toEqual({ kind: 'choose-qty' });
-    expect(resolveStartOrder(true, 0)).toEqual({ kind: 'choose-qty' });
+    expect(resolveStartOrder(true, null, false)).toEqual({
+      kind: 'choose-qty',
+    });
+    expect(resolveStartOrder(true, 0, false)).toEqual({ kind: 'choose-qty' });
+  });
+});
+
+describe('parseOnboardingChoice', () => {
+  it('валидные варианты → сами себя', () => {
+    expect(parseOnboardingChoice('kit')).toBe('kit');
+    expect(parseOnboardingChoice('own')).toBe('own');
+    expect(parseOnboardingChoice('existing')).toBe('existing');
+    expect(parseOnboardingChoice('other')).toBe('other');
+  });
+
+  it('чужой/подделанный вариант → null', () => {
+    expect(parseOnboardingChoice('admin')).toBeNull();
+    expect(parseOnboardingChoice('')).toBeNull();
+  });
+});
+
+describe('parseTaraCount', () => {
+  it('целое 1..MAX_ORDER_QTY → число', () => {
+    expect(parseTaraCount('1')).toBe(1);
+    expect(parseTaraCount('5')).toBe(5);
+    expect(parseTaraCount(String(MAX_ORDER_QTY))).toBe(MAX_ORDER_QTY);
+  });
+
+  it('вне границ / не число → null', () => {
+    expect(parseTaraCount('0')).toBeNull();
+    expect(parseTaraCount('-2')).toBeNull();
+    expect(parseTaraCount('2.5')).toBeNull();
+    expect(parseTaraCount(String(MAX_ORDER_QTY + 1))).toBeNull();
+    expect(parseTaraCount('abc')).toBeNull();
+  });
+});
+
+describe('parsePumpChoice', () => {
+  it('std/electro → сами себя', () => {
+    expect(parsePumpChoice('std')).toBe('std');
+    expect(parsePumpChoice('electro')).toBe('electro');
+  });
+
+  it('чужое → null', () => {
+    expect(parsePumpChoice('gold')).toBeNull();
+    expect(parsePumpChoice('')).toBeNull();
+  });
+});
+
+describe('parseYesNo', () => {
+  it('yes → true, no → false', () => {
+    expect(parseYesNo('yes')).toBe(true);
+    expect(parseYesNo('no')).toBe(false);
+  });
+
+  it('чужое → null', () => {
+    expect(parseYesNo('maybe')).toBeNull();
+    expect(parseYesNo('')).toBeNull();
   });
 });
 

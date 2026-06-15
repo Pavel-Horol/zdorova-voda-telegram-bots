@@ -1,5 +1,5 @@
 import { InlineKeyboard } from 'grammy';
-import { OrderStatus } from '../../../generated/prisma/enums';
+import { OrderStatus, OrderKind } from '../../../generated/prisma/enums';
 import type {
   Order,
   Client,
@@ -97,9 +97,14 @@ export const dispatcherCommands = [
  * Коммент — в скобках, как в примере спеки.
  */
 function driverLine(order: Order, address: Address): string {
-  const qty = order.isFirstOrder
-    ? `${order.bottles}бут [ПЕРВЫЙ +помпа]`
-    : `${order.bottles}по${order.totalPrice / order.bottles}`;
+  const pumpMark = order.electro ? '+электро' : '+помпа';
+  const ownPump = order.pumpAddon ? ' +помпа' : '';
+  const qty =
+    order.kind === OrderKind.STARTER_KIT
+      ? `${order.bottles}бут [ПЕРВЫЙ ${pumpMark}]`
+      : order.kind === OrderKind.OWN_TARA
+        ? `${order.bottles}по${order.totalPrice / order.bottles} [СВОЯ ТАРА${ownPump}]`
+        : `${order.bottles}по${order.totalPrice / order.bottles}`;
   const comment = address.comment ? ` (${address.comment})` : '';
   return `${qty} ${address.raw}${comment}`;
 }
@@ -111,7 +116,13 @@ export function orderMessage(
   address: Address,
 ): string {
   const header = STATUS_HEADER[order.status];
-  const firstMark = order.isFirstOrder ? '  [ПЕРВЫЙ ЗАКАЗ ⚠️]' : '';
+  const firstMark = client.pendingReview
+    ? '  [СВЕРИТЬ ⚠️ заявлен действующим]'
+    : order.kind === OrderKind.STARTER_KIT
+      ? '  [ПЕРВЫЙ ЗАКАЗ ⚠️]'
+      : order.kind === OrderKind.OWN_TARA
+        ? '  [СВОЯ ТАРА ⚠️ проверить бак]'
+        : '';
   const name = client.name ?? 'без имени';
   return (
     `${header} #${order.id.slice(0, 8)}${firstMark}\n` +

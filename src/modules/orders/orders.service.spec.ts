@@ -27,6 +27,8 @@ const client = {
   phone: '+380',
   name: null,
   createdAt: new Date(),
+  bottlesOnHand: 5,
+  hasPump: true,
 };
 
 const address = {
@@ -49,8 +51,13 @@ describe('OrdersService', () => {
       findUniqueOrThrow: jest.Mock;
       update: jest.Mock;
     };
+    client: { update: jest.Mock };
   };
-  let clients: { getById: jest.Mock; getDefaultAddress: jest.Mock };
+  let clients: {
+    getById: jest.Mock;
+    getDefaultAddress: jest.Mock;
+    setTaraState: jest.Mock;
+  };
   let pricingSettings: { getCurrent: jest.Mock };
   let dispatcher: {
     notifyNewOrder: jest.Mock;
@@ -68,10 +75,12 @@ describe('OrdersService', () => {
         findUniqueOrThrow: jest.fn(),
         update: jest.fn(),
       },
+      client: { update: jest.fn() },
     };
     clients = {
       getById: jest.fn().mockResolvedValue(client),
       getDefaultAddress: jest.fn().mockResolvedValue(address),
+      setTaraState: jest.fn().mockResolvedValue(undefined),
     };
     pricingSettings = { getCurrent: jest.fn().mockResolvedValue(prices) };
     dispatcher = {
@@ -95,8 +104,11 @@ describe('OrdersService', () => {
   // возвращаемый сервисом Order приходит из сгенерированного клиента и в контексте
   // юнит-теста выводится как any, поэтому assertions строим на аргументах вызовов.
   describe('createOrder', () => {
-    it('первый заказ: isFirstOrder=true, сумма по стартовому комплекту (1 бак → 750)', async () => {
-      const created = { id: 'o1', isFirstOrder: true, totalPrice: 750 };
+    it('первый заказ: kind=STARTER_KIT, сумма по стартовому комплекту (1 бак → 750)', async () => {
+      // Новичок без своей тары → STARTER_KIT (deriveKind смотрит bottlesOnHand).
+      const freshClient = { ...client, bottlesOnHand: 0 };
+      clients.getById.mockResolvedValue(freshClient);
+      const created = { id: 'o1', kind: 'STARTER_KIT', totalPrice: 750 };
       prisma.order.count.mockResolvedValue(0);
       prisma.order.create.mockResolvedValue(created);
 
@@ -110,20 +122,22 @@ describe('OrdersService', () => {
           clientId: 'c1',
           addressId: 'a1',
           bottles: 1,
-          isFirstOrder: true,
+          kind: 'STARTER_KIT',
+          electro: false,
+          pumpAddon: false,
           totalPrice: 750,
           status: 'CREATED',
         },
       });
       expect(dispatcher.notifyNewOrder).toHaveBeenCalledWith(
         created,
-        client,
+        freshClient,
         address,
       );
     });
 
-    it('повторный заказ: isFirstOrder=false, сумма по сетке воды (2 бутыли → 140)', async () => {
-      const created = { id: 'o2', isFirstOrder: false, totalPrice: 140 };
+    it('повторный заказ: kind=REPEAT, сумма по сетке воды (2 бутыли → 140)', async () => {
+      const created = { id: 'o2', kind: 'REPEAT', totalPrice: 140 };
       prisma.order.count.mockResolvedValue(3); // есть прошлые активные заказы
       prisma.order.create.mockResolvedValue(created);
 
@@ -134,7 +148,31 @@ describe('OrdersService', () => {
           clientId: 'c1',
           addressId: 'a1',
           bottles: 2,
-          isFirstOrder: false,
+          kind: 'REPEAT',
+          electro: false,
+          pumpAddon: false,
+          totalPrice: 140,
+          status: 'CREATED',
+        },
+      });
+    });
+
+    it('первый заказ со своей тарой (bottlesOnHand>0) → kind=OWN_TARA, только вода (2 → 140)', async () => {
+      // shared client: bottlesOnHand=5 → первый заказ распознаётся как своя тара.
+      const created = { id: 'o3', kind: 'OWN_TARA', totalPrice: 140 };
+      prisma.order.count.mockResolvedValue(0); // первый заказ
+      prisma.order.create.mockResolvedValue(created);
+
+      await service.createOrder('c1', 2);
+
+      expect(prisma.order.create).toHaveBeenCalledWith({
+        data: {
+          clientId: 'c1',
+          addressId: 'a1',
+          bottles: 2,
+          kind: 'OWN_TARA',
+          electro: false,
+          pumpAddon: false,
           totalPrice: 140,
           status: 'CREATED',
         },
@@ -172,14 +210,23 @@ describe('OrdersService', () => {
   });
 
   describe('переходы статусов', () => {
-    it('acceptOrder: CREATED → ACCEPTED', async () => {
+    it('acceptOrder: CREATED → ACCEPTED + снимает pendingReview клиента', async () => {
       prisma.order.findUniqueOrThrow.mockResolvedValue({
         id: 'o1',
         status: 'CREATED',
       });
-      prisma.order.update.mockResolvedValue({ id: 'o1', status: 'ACCEPTED' });
+      prisma.order.update.mockResolvedValue({
+        id: 'o1',
+        clientId: 'c1',
+        status: 'ACCEPTED',
+      });
 
       await service.acceptOrder('o1');
+
+      // приём = сверка заявленного действующего клиента диспетчером (T4).
+      expect(clients.setTaraState).toHaveBeenCalledWith('c1', {
+        pendingReview: false,
+      });
 
       expect(prisma.order.update).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -192,7 +239,29 @@ describe('OrdersService', () => {
       );
       // диспетчерский переход эмитит событие — клиентский бот уведомит клиента.
       expect(events.emit).toHaveBeenCalledWith('order.status.changed', {
-        order: { id: 'o1', status: 'ACCEPTED' },
+        order: { id: 'o1', clientId: 'c1', status: 'ACCEPTED' },
+      });
+    });
+
+    it('markDelivered: ACCEPTED → DELIVERED начисляет новую тару клиенту (STARTER_KIT 2 → +2)', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue({
+        id: 'o1',
+        status: 'ACCEPTED',
+      });
+      prisma.order.update.mockResolvedValue({
+        id: 'o1',
+        clientId: 'c1',
+        kind: 'STARTER_KIT',
+        bottles: 2,
+        status: 'DELIVERED',
+      });
+
+      await service.markDelivered('o1');
+
+      // STARTER_KIT → все баки в оборот + помпа (комплект) у клиента.
+      expect(prisma.client.update).toHaveBeenCalledWith({
+        where: { id: 'c1' },
+        data: { bottlesOnHand: { increment: 2 }, hasPump: true },
       });
     });
 
@@ -285,7 +354,7 @@ describe('OrdersService', () => {
       prisma.order.findUniqueOrThrow.mockResolvedValue({
         id: 'o1',
         status: 'CREATED',
-        isFirstOrder: false,
+        kind: 'REPEAT',
       });
       prisma.order.update.mockResolvedValue({ id: 'o1', bottles: 3 });
 
@@ -302,7 +371,7 @@ describe('OrdersService', () => {
       prisma.order.findUniqueOrThrow.mockResolvedValue({
         id: 'o1',
         status: 'ACCEPTED',
-        isFirstOrder: true,
+        kind: 'STARTER_KIT',
       });
       prisma.order.update.mockResolvedValue({ id: 'o1' });
 
@@ -319,7 +388,7 @@ describe('OrdersService', () => {
       prisma.order.findUniqueOrThrow.mockResolvedValue({
         id: 'o1',
         status: 'DELIVERED',
-        isFirstOrder: false,
+        kind: 'REPEAT',
       });
 
       await expect(service.editQuantity('o1', 3)).rejects.toThrow();

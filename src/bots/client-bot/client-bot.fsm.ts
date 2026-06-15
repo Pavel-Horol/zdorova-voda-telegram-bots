@@ -7,10 +7,59 @@
 export enum Step {
   AwaitContact = 'AWAIT_CONTACT',
   MainMenu = 'MAIN_MENU',
+  Onboarding = 'ONBOARDING',
+  PumpChoice = 'PUMP_CHOICE',
+  OwnTaraCount = 'OWN_TARA_COUNT',
+  OwnPumpAsk = 'OWN_PUMP_ASK',
   AwaitAddress = 'AWAIT_ADDRESS',
   AwaitComment = 'AWAIT_COMMENT',
   ChooseQty = 'CHOOSE_QTY',
   Confirm = 'CONFIRM',
+}
+
+/** Выбор на экране онбординга новичка (PRODUCT.md, STEP3 T3). */
+export type OnboardingChoice = 'kit' | 'own' | 'existing' | 'other';
+
+/**
+ * Парсит выбор онбординга из `callback_data` (`ob:<choice>`). Вход недоверенный —
+ * чужой вариант → null (хендлер выходит без действия).
+ */
+export function parseOnboardingChoice(raw: string): OnboardingChoice | null {
+  switch (raw) {
+    case 'kit':
+    case 'own':
+    case 'existing':
+    case 'other':
+      return raw;
+    default:
+      return null;
+  }
+}
+
+/**
+ * Парсит число своих баков (OWN_TARA) из текста. Целое `1..MAX_ORDER_QTY` либо
+ * null (не число / вне границ) — недоверенный ввод, как {@link parseQty}.
+ */
+export function parseTaraCount(raw: string): number | null {
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 1) return null;
+  if (n > MAX_ORDER_QTY) return null;
+  return n;
+}
+
+/** Выбор помпы в стартовом комплекте (STEP3 T5). */
+export type PumpChoice = 'std' | 'electro';
+
+/** Парсит выбор помпы из `callback_data` (`pump:std|electro`). */
+export function parsePumpChoice(raw: string): PumpChoice | null {
+  return raw === 'std' || raw === 'electro' ? raw : null;
+}
+
+/** Парсит ответ да/нет (`yn:yes|no`) — напр. «помпа есть?». */
+export function parseYesNo(raw: string): boolean | null {
+  if (raw === 'yes') return true;
+  if (raw === 'no') return false;
+  return null;
 }
 
 /**
@@ -59,6 +108,10 @@ export function parseQty(raw: string): number | null {
 export type ScreenIntent =
   | { kind: 'await-contact' }
   | { kind: 'main-menu'; name: string | null }
+  | { kind: 'onboarding' }
+  | { kind: 'pump-choice' }
+  | { kind: 'own-tara-count' }
+  | { kind: 'own-pump-ask' }
   | { kind: 'address-prompt' }
   | { kind: 'comment-prompt' }
   | { kind: 'choose-qty' }
@@ -118,10 +171,12 @@ export function resolveBack(
 export function resolveStartOrder(
   hasDefaultAddress: boolean,
   lastBottles: number | null,
+  needsOnboarding: boolean,
 ): Extract<
   ScreenIntent,
-  { kind: 'address-prompt' | 'choose-qty' | 'confirm' }
+  { kind: 'onboarding' | 'address-prompt' | 'choose-qty' | 'confirm' }
 > {
+  if (needsOnboarding) return { kind: 'onboarding' };
   if (!hasDefaultAddress) return { kind: 'address-prompt' };
   if (!lastBottles) return { kind: 'choose-qty' };
   return { kind: 'confirm', bottles: lastBottles };

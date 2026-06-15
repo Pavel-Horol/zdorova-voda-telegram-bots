@@ -26,7 +26,11 @@ import { OrderStatus } from '../../../generated/prisma/enums';
 import { texts } from './client-bot.texts';
 import {
   assertNever,
+  parseOnboardingChoice,
+  parsePumpChoice,
   parseQty,
+  parseTaraCount,
+  parseYesNo,
   resolveAfterQty,
   resolveBack,
   resolveConfirm,
@@ -38,6 +42,10 @@ import {
 
 /** Шаги активного сценария заказа — на них действует «Назад»/«Отмена» (SPEC §6). */
 const ORDER_FLOW_STEPS: readonly Step[] = [
+  Step.Onboarding,
+  Step.PumpChoice,
+  Step.OwnTaraCount,
+  Step.OwnPumpAsk,
   Step.AwaitAddress,
   Step.AwaitComment,
   Step.ChooseQty,
@@ -58,6 +66,15 @@ interface SessionData {
    * Пушатся только inline-переходы внутри флоу; reply-кнопки стек обнуляют.
    */
   history: Step[];
+  /**
+   * Онбординг «🔁 Я уже ваш клиент»: ввод числа баков идёт тем же шагом, что и
+   * «свои баки», но проставляет клиенту `pendingReview` (диспетчер сверит).
+   */
+  existingClient?: boolean;
+  /** Электро-помпа в стартовом комплекте (T5). */
+  electro?: boolean;
+  /** Докупка помпы к своей таре (T5, ответ «нет помпы»). */
+  pumpAddon?: boolean;
   /**
    * message_id последнего отправленного inline-экрана сценария. При любом
    * переходе с него снимаем клавиатуру, чтобы в чате не висели «мёртвые» кнопки
@@ -146,6 +163,35 @@ const confirmKeyboard = new InlineKeyboard()
   .text('✏️ Изменить', CB_BACK)
   .text('❌ Отмена', CB_CANCEL);
 
+/** Онбординг новичка: «что у вас уже есть» (STEP3 T3). */
+const onboardingKeyboard = new InlineKeyboard()
+  .text('🆕 Стартовый комплект', 'ob:kit')
+  .row()
+  .text('💧 Свои баки', 'ob:own')
+  .row()
+  .text('🔁 Я уже ваш клиент', 'ob:existing')
+  .row()
+  .text('⚙️ Другое', 'ob:other')
+  .row()
+  .text('❌ Отмена', CB_CANCEL);
+
+/** Под вводом числа своих баков (OWN_TARA) — только отмена. */
+const ownTaraKeyboard = new InlineKeyboard().text('❌ Отмена', CB_CANCEL);
+
+/** Выбор помпы в стартовом комплекте: обычная / электро (T5). */
+const pumpChoiceKeyboard = new InlineKeyboard()
+  .text('Обычная', 'pump:std')
+  .text('Электро', 'pump:electro')
+  .row()
+  .text('❌ Отмена', CB_CANCEL);
+
+/** Своя тара: есть ли помпа (T5). */
+const ownPumpKeyboard = new InlineKeyboard()
+  .text('Помпа есть', 'yn:yes')
+  .text('Нужна помпа', 'yn:no')
+  .row()
+  .text('❌ Отмена', CB_CANCEL);
+
 /**
  * Клиентский бот (SPEC §6): grammY-инстанс на CLIENT_BOT_TOKEN, long polling.
  * FSM реализован поверх in-memory сессии grammY — при перезапуске диалог
@@ -222,6 +268,11 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
   private registerHandlers(bot: Bot<BotContext>): void {
     bot.command('start', (ctx) => this.onStart(ctx));
     bot.on('message:contact', (ctx) => this.onContact(ctx));
+    bot.callbackQuery(/^ob:(kit|own|existing|other)$/, (ctx) =>
+      this.onOnboardingChoice(ctx),
+    );
+    bot.callbackQuery(/^pump:(std|electro)$/, (ctx) => this.onPumpChoice(ctx));
+    bot.callbackQuery(/^yn:(yes|no)$/, (ctx) => this.onOwnPumpAnswer(ctx));
     bot.callbackQuery(/^qty:([1-9]\d*)$/, (ctx) => this.onChooseQty(ctx));
     bot.callbackQuery(CB_CONFIRM_YES, (ctx) => this.onConfirmYes(ctx));
     bot.callbackQuery(CB_BACK, (ctx) => this.onBack(ctx));
@@ -269,7 +320,21 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
       client = await this.registerClient(BigInt(ctx.from.id), phone, name);
     }
 
+    // Новичок (нет заказов и состояния) → сразу онбординг, а не меню (STEP3 T3).
+    if (await this.needsOnboarding(client)) {
+      await this.renderOnboarding(ctx);
+      return;
+    }
     await this.showMainMenu(ctx, client.name);
+  }
+
+  /**
+   * Нужен ли клиенту онбординг: ещё не настроен (нет своей тары и помпы) и нет
+   * ни одного не-отменённого заказа. По нему решаем показ экрана «что у вас есть».
+   */
+  private async needsOnboarding(client: Client): Promise<boolean> {
+    if (client.bottlesOnHand > 0 || client.hasPump) return false;
+    return (await this.orders.lastBottles(client.id)) === null;
   }
 
   /**
@@ -303,6 +368,8 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
       await this.onAddressInput(ctx, text);
     } else if (ctx.session.step === Step.AwaitComment) {
       await this.finalizeAddress(ctx, text);
+    } else if (ctx.session.step === Step.OwnTaraCount) {
+      await this.onOwnTaraCountInput(ctx, text);
     }
   }
 
@@ -313,7 +380,11 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
    */
   private async onNonTextMessage(ctx: BotContext): Promise<void> {
     const step = ctx.session.step;
-    if (step === Step.AwaitAddress || step === Step.AwaitComment) {
+    if (
+      step === Step.AwaitAddress ||
+      step === Step.AwaitComment ||
+      step === Step.OwnTaraCount
+    ) {
       await ctx.reply(texts.sendAsText);
     }
   }
@@ -374,7 +445,13 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
     const lastBottles = address
       ? await this.orders.lastBottles(client.id)
       : null;
-    const intent = resolveStartOrder(address !== null, lastBottles);
+    const needsOnboarding =
+      lastBottles === null && client.bottlesOnHand === 0 && !client.hasPump;
+    const intent = resolveStartOrder(
+      address !== null,
+      lastBottles,
+      needsOnboarding,
+    );
     if (intent.kind === 'confirm') {
       // Подставляем прошлое количество и подталкиваем историю шагом выбора
       // количества, чтобы «✏️ Изменить» (= «Назад») вёл к нему, а не в меню.
@@ -382,6 +459,96 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
       this.pushHistory(ctx, Step.ChooseQty);
     }
     await this.renderScreen(ctx, intent, { client, address });
+  }
+
+  /**
+   * Выбор на экране онбординга (STEP3 T3). kit → обычный первый-заказ флоу;
+   * own → ввод числа своих баков; existing/other → пока к диспетчеру (T4).
+   * kind заказа выводится из состояния клиента (своя тара → OWN_TARA), поэтому
+   * в сессию его не тащим.
+   */
+  private async onOnboardingChoice(ctx: BotContext): Promise<void> {
+    await ctx.answerCallbackQuery();
+    if (ctx.session.step !== Step.Onboarding) return;
+    const choice = parseOnboardingChoice(ctx.match?.[1] ?? '');
+    if (choice === null) return;
+    const client = await this.requireClient(ctx);
+    if (!client) return;
+
+    ctx.session.bottles = undefined;
+    ctx.session.history = [Step.MainMenu];
+    ctx.session.existingClient = false;
+    switch (choice) {
+      case 'kit':
+        await this.renderPumpChoice(ctx);
+        return;
+      case 'own':
+        await this.renderOwnTaraCount(ctx);
+        return;
+      case 'existing':
+        // Заявлен действующим: тот же ввод баков, но с пометкой на сверку диспетчеру.
+        ctx.session.existingClient = true;
+        await this.renderOwnTaraCount(ctx);
+        return;
+      case 'other': {
+        // Нестандарт — оформит диспетчер (звонком). Заглушка с возвратом в меню.
+        const phone =
+          this.config.get<string>('SUPPORT_PHONE') ?? '(телефон уточняется)';
+        this.resetSession(ctx, Step.MainMenu);
+        await this.replyMenu(ctx, texts.onboardingToDispatcher(phone));
+        return;
+      }
+    }
+  }
+
+  /**
+   * Ввод числа своих баков (OWN_TARA, шаг OwnTaraCount). Объявленная клиентом
+   * тара становится стартовым балансом (помпа есть — своя); дальше обычный сбор
+   * адреса. Тип заказа OWN_TARA выведется из bottlesOnHand>0 при расчёте.
+   */
+  private async onOwnTaraCountInput(
+    ctx: BotContext,
+    text: string,
+  ): Promise<void> {
+    const client = await this.requireClient(ctx);
+    if (!client) return;
+    const count = parseTaraCount(text);
+    if (count === null) {
+      await ctx.reply(texts.ownTaraInvalid);
+      return;
+    }
+    await this.clients.setTaraState(client.id, {
+      bottlesOnHand: count,
+      hasPump: true,
+      // «Я уже ваш клиент» → флаг на сверку диспетчером (снимется при приёме заказа).
+      pendingReview: ctx.session.existingClient === true,
+    });
+    if (ctx.session.existingClient === true) {
+      // Действующий клиент — помпа у него наша, вопрос не задаём.
+      await this.renderAddressPrompt(ctx);
+    } else {
+      await this.renderOwnPumpAsk(ctx);
+    }
+  }
+
+  /** Выбор помпы в стартовом комплекте (T5): обычная / электро. */
+  private async onPumpChoice(ctx: BotContext): Promise<void> {
+    await ctx.answerCallbackQuery();
+    if (ctx.session.step !== Step.PumpChoice) return;
+    const choice = parsePumpChoice(ctx.match?.[1] ?? '');
+    if (choice === null) return;
+    ctx.session.electro = choice === 'electro';
+    await this.renderAddressPrompt(ctx);
+  }
+
+  /** Своя тара: есть ли помпа (T5). «Нет» → докупка помпы к заказу. */
+  private async onOwnPumpAnswer(ctx: BotContext): Promise<void> {
+    await ctx.answerCallbackQuery();
+    if (ctx.session.step !== Step.OwnPumpAsk) return;
+    const hasPump = parseYesNo(ctx.match?.[1] ?? '');
+    if (hasPump === null) return;
+    ctx.session.pumpAddon = hasPump === false;
+    await this.renderAddressPrompt(ctx);
   }
 
   /**
@@ -485,11 +652,16 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
       await this.showMainMenu(ctx, client.name);
       return;
     }
+    // Опции помпы — до resetSession (он их обнуляет).
+    const pumpOpts = {
+      electro: ctx.session.electro,
+      pumpAddon: ctx.session.pumpAddon,
+    };
     // Уводим из Confirm ДО создания заказа — повторный тап не создаст дубль.
     this.resetSession(ctx, Step.MainMenu);
 
     try {
-      await this.orders.createOrder(client.id, bottles);
+      await this.orders.createOrder(client.id, bottles, pumpOpts);
     } catch (err) {
       // Сбой создания (БД/гонка) — не молчим: клиент должен понять, что заказ
       // не оформлен, и повторить (выбор кол-ва уже сброшен — оформит заново).
@@ -562,6 +734,18 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
       case 'main-menu':
         await this.showMainMenu(ctx, intent.name);
         return;
+      case 'onboarding':
+        await this.renderOnboarding(ctx);
+        return;
+      case 'own-tara-count':
+        await this.renderOwnTaraCount(ctx);
+        return;
+      case 'pump-choice':
+        await this.renderPumpChoice(ctx);
+        return;
+      case 'own-pump-ask':
+        await this.renderOwnPumpAsk(ctx);
+        return;
       case 'address-prompt':
         await this.renderAddressPrompt(ctx);
         return;
@@ -594,6 +778,36 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
     await this.replyMenu(ctx, texts.mainMenu(name));
   }
 
+  private async renderOnboarding(ctx: BotContext): Promise<void> {
+    ctx.session.step = Step.Onboarding;
+    await this.replyInline(ctx, texts.onboarding, onboardingKeyboard);
+  }
+
+  private async renderOwnTaraCount(ctx: BotContext): Promise<void> {
+    ctx.session.step = Step.OwnTaraCount;
+    await this.replyInline(ctx, texts.ownTaraCount, ownTaraKeyboard);
+  }
+
+  private async renderPumpChoice(ctx: BotContext): Promise<void> {
+    ctx.session.step = Step.PumpChoice;
+    const prices = await this.pricingSettings.getCurrent();
+    await this.replyInline(
+      ctx,
+      texts.pumpChoice(prices.pumpPrice, prices.electroPumpPrice),
+      pumpChoiceKeyboard,
+    );
+  }
+
+  private async renderOwnPumpAsk(ctx: BotContext): Promise<void> {
+    ctx.session.step = Step.OwnPumpAsk;
+    const prices = await this.pricingSettings.getCurrent();
+    await this.replyInline(
+      ctx,
+      texts.ownPumpAsk(prices.pumpPrice),
+      ownPumpKeyboard,
+    );
+  }
+
   private async renderAddressPrompt(ctx: BotContext): Promise<void> {
     ctx.session.step = Step.AwaitAddress;
     await this.replyInline(ctx, texts.awaitAddress, addressKeyboard);
@@ -623,7 +837,10 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
       await this.renderChooseQty(ctx, clientId);
       return;
     }
-    const quote = await this.orders.quote(clientId, intent.bottles);
+    const quote = await this.orders.quote(clientId, intent.bottles, {
+      electro: ctx.session.electro,
+      pumpAddon: ctx.session.pumpAddon,
+    });
     ctx.session.step = Step.Confirm;
     await this.replyInline(ctx, texts.confirm(quote, address), confirmKeyboard);
   }
@@ -683,6 +900,9 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
     ctx.session.step = step;
     ctx.session.bottles = undefined;
     ctx.session.addressRaw = undefined;
+    ctx.session.existingClient = undefined;
+    ctx.session.electro = undefined;
+    ctx.session.pumpAddon = undefined;
     ctx.session.history = [];
   }
 

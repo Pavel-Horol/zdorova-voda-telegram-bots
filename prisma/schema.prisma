@@ -15,12 +15,21 @@ datasource db {
   provider = "postgresql"
 }
 
-/// Статусы заказа (SPEC §4 / §7).
+/// Статусы заказа (PRODUCT.md «Сквозной путь заказа»).
 enum OrderStatus {
   CREATED
   ACCEPTED
   DELIVERED
   CANCELLED
+}
+
+/// Тип заказа — определяет расчёт суммы (PRODUCT.md «Ценообразование»).
+/// STARTER_KIT — стартовый комплект; OWN_TARA — своя тара (вода, залог 0);
+/// REPEAT — повторный (сетка + добор тары сверх остатка).
+enum OrderKind {
+  STARTER_KIT
+  OWN_TARA
+  REPEAT
 }
 
 /// Клиент бота. Идентифицируется по Telegram-аккаунту и телефону.
@@ -31,6 +40,12 @@ model Client {
   phone      String   @unique
   name       String?
   createdAt  DateTime @default(now())
+  /// Состояние тары/помпы клиента (PRODUCT.md): для добора тары и пропуска онбординга.
+  bottlesOnHand Int     @default(0)
+  hasPump       Boolean @default(false)
+  /// Клиент заявил, что уже действующий («я уже ваш клиент»), но диспетчер ещё не
+  /// сверил. Снимается при приёме его заказа диспетчером (PRODUCT.md, STEP3 T4).
+  pendingReview Boolean @default(false)
 
   addresses Address[]
   orders    Order[]
@@ -57,8 +72,12 @@ model Order {
   clientId     String
   addressId    String
   bottles      Int
-  /// true → сумма по стартовому комплекту (залог + помпа + старт-вода), PRODUCT.md.
-  isFirstOrder Boolean
+  /// Тип заказа (PRODUCT.md): определяет расчёт суммы в pricing.service.
+  kind         OrderKind
+  /// Стартовый комплект с электро-помпой (270 вместо 250). STEP3 T5.
+  electro      Boolean     @default(false)
+  /// OWN_TARA с докупкой помпы (+250), если у клиента её нет. STEP3 T5.
+  pumpAddon    Boolean     @default(false)
   /// Зафиксированная сумма заказа в гривнах (целое, без копеек).
   totalPrice   Int
   status       OrderStatus @default(CREATED)

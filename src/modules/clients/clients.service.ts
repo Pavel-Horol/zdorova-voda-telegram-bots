@@ -14,10 +14,6 @@ export interface AddAddressInput {
   isDefault?: boolean;
 }
 
-/**
- * Клиенты и их адреса (SPEC §4). Доступ к БД — только здесь, внутри сервиса
- * модуля; боты обращаются к данным клиента через этот сервис (CLAUDE.md §6).
- */
 @Injectable()
 export class ClientsService {
   constructor(private readonly prisma: PrismaService) {}
@@ -50,10 +46,6 @@ export class ClientsService {
     });
   }
 
-  /**
-   * Привязывает адрес к клиенту. Если isDefault=true — снимает флаг с прочих
-   * адресов клиента в одной транзакции, чтобы default всегда был один.
-   */
   async addAddress(clientId: string, input: AddAddressInput): Promise<Address> {
     const makeDefault = input.isDefault ?? false;
 
@@ -87,11 +79,24 @@ export class ClientsService {
   }
 
   /**
-   * Устанавливает default-адрес клиента: если он уже есть — обновляет ту же
-   * запись, иначе создаёт. Это держит у клиента ровно один default-адрес и не
-   * плодит дубли при повторном проходе шага адреса (возврат «Назад» в первом
-   * заказе). Возврат залога/история адресов в MVP не нужны (SPEC §10).
+   * Проставляет состояние тары/помпы клиента (онбординг OWN_TARA: клиент ввёл
+   * число своих баков; подтверждение «я уже клиент» диспетчером). Перезаписывает,
+   * не инкрементит — это объявленный стартовый баланс, не доставка.
    */
+  setTaraState(
+    clientId: string,
+    input: {
+      bottlesOnHand?: number;
+      hasPump?: boolean;
+      pendingReview?: boolean;
+    },
+  ): Promise<Client> {
+    return this.prisma.client.update({
+      where: { id: clientId },
+      data: input,
+    });
+  }
+
   async setDefaultAddress(
     clientId: string,
     input: { raw: string; comment?: string | null },

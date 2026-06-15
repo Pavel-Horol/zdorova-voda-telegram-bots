@@ -12,7 +12,7 @@ import {
   ORDER_STATUS_CHANGED,
   type OrderStatusChangedEvent,
 } from './order-events';
-import { OrderStatus } from '../../../generated/prisma/enums';
+import { OrderStatus, OrderKind } from '../../../generated/prisma/enums';
 import type { Order, Client, Address } from '../../../generated/prisma/client';
 
 /** Заказ вместе со связанными клиентом и адресом (для рендера у диспетчера). */
@@ -23,17 +23,31 @@ export type OrderWithRelations = Order & { client: Client; address: Address };
  * Бот рендерит подтверждение по этим данным и сам деньги НЕ считает (CLAUDE.md §1).
  */
 export interface OrderQuote {
-  isFirstOrder: boolean;
+  kind: OrderKind;
   bottles: number;
   totalPrice: number;
-  /** Цена за бутыль — только для повторного заказа (для текста «N × цена»). */
+  /** Цена воды за бутыль по сетке — для НЕ-комплектного заказа (для текста). */
   perBottle: number | null;
+  /** Сколько баков заказа — новая тара под залог (>0 → добор тары для текста). */
+  newTara: number;
   /** Залог за бак — для разбивки стартового комплекта. */
   depositPerBottle: number;
   /** Цена помпы — для разбивки стартового комплекта. */
   pumpPrice: number;
+  /** Цена электро-помпы — для разбивки комплекта с электро. */
+  electroPumpPrice: number;
   /** Старт-вода за бак — для разбивки стартового комплекта. */
   waterStartPrice: number;
+  /** Электро-помпа в комплекте (для текста подтверждения). */
+  electro: boolean;
+  /** Докупка помпы к своей таре (для текста подтверждения). */
+  pumpAddon: boolean;
+}
+
+/** Опции помпы заказа (выбор клиента в онбординге). */
+export interface PumpOptions {
+  electro?: boolean;
+  pumpAddon?: boolean;
 }
 
 /**
@@ -144,7 +158,11 @@ export class OrdersService {
    * Цены берутся из PriceSettings на момент оформления и не пересчитываются
    * задним числом (SPEC §3.3, §4).
    */
-  async createOrder(clientId: string, bottles: number): Promise<Order> {
+  async createOrder(
+    clientId: string,
+    bottles: number,
+    opts: PumpOptions = {},
+  ): Promise<Order> {
     const client = await this.clients.getById(clientId);
     if (!client) {
       throw new Error(`client not found: ${clientId}`);
@@ -155,12 +173,14 @@ export class OrdersService {
       throw new Error(`client ${clientId} has no default address`);
     }
 
-    const isFirstOrder = await this.isFirstOrder(clientId);
+    const kind = await this.deriveKind(client);
     const prices = await this.pricingSettings.getCurrent();
     const totalPrice = this.pricing.calculateTotal(
       bottles,
-      isFirstOrder,
+      kind,
       prices,
+      client.bottlesOnHand,
+      opts,
     );
 
     const order = await this.prisma.order.create({
@@ -168,7 +188,9 @@ export class OrdersService {
         clientId,
         addressId: address.id,
         bottles,
-        isFirstOrder,
+        kind,
+        electro: opts.electro ?? false,
+        pumpAddon: opts.pumpAddon ?? false,
         totalPrice,
         status: OrderStatus.CREATED,
       },
@@ -185,29 +207,45 @@ export class OrdersService {
    * источник правды по сумме (CLAUDE.md §1). perBottle выводится из totalPrice,
    * чтобы не дублировать выбор ценовой ветки из PricingService.
    */
-  async quote(clientId: string, bottles: number): Promise<OrderQuote> {
-    const isFirstOrder = await this.isFirstOrder(clientId);
+  async quote(
+    clientId: string,
+    bottles: number,
+    opts: PumpOptions = {},
+  ): Promise<OrderQuote> {
+    const client = await this.clients.getById(clientId);
+    const bottlesOnHand = client?.bottlesOnHand ?? 0;
+    const kind = client ? await this.deriveKind(client) : OrderKind.STARTER_KIT;
     const prices = await this.pricingSettings.getCurrent();
     const totalPrice = this.pricing.calculateTotal(
       bottles,
-      isFirstOrder,
+      kind,
       prices,
+      bottlesOnHand,
+      opts,
     );
+    const newTara = this.pricing.newTara(bottles, kind, bottlesOnHand);
     return {
-      isFirstOrder,
+      kind,
       bottles,
       totalPrice,
-      perBottle: isFirstOrder ? null : totalPrice / bottles,
+      perBottle:
+        kind === OrderKind.STARTER_KIT
+          ? null
+          : this.pricing.waterUnitPrice(bottles, prices),
+      newTara,
       depositPerBottle: prices.depositPerBottle,
       pumpPrice: prices.pumpPrice,
+      electroPumpPrice: prices.electroPumpPrice,
       waterStartPrice: prices.waterStartPrice,
+      electro: opts.electro ?? false,
+      pumpAddon: opts.pumpAddon ?? false,
     };
   }
 
   /**
    * Правка количества бутылей в активном заказе диспетчером (SPEC §7, кнопка
-   * «✏️ Изменить»): пересчитывает totalPrice через pricing (по isFirstOrder
-   * заказа и текущим ценам). Это осознанный ручной оверрайд — фиксация цены при
+   * «✏️ Изменить»): пересчитывает totalPrice через pricing (по kind заказа
+   * и текущим ценам). Это осознанный ручной оверрайд — фиксация цены при
    * создании (§4) защищает от АВТО-пересчёта при смене прайса, а не от правки
    * диспетчером. Разрешено только для created/accepted.
    */
@@ -225,10 +263,13 @@ export class OrdersService {
       throw new Error(`cannot edit order ${orderId} in status ${order.status}`);
     }
     const prices = await this.pricingSettings.getCurrent();
+    const client = await this.clients.getById(order.clientId);
     const totalPrice = this.pricing.calculateTotal(
       bottles,
-      order.isFirstOrder,
+      order.kind,
       prices,
+      client?.bottlesOnHand ?? 0,
+      { electro: order.electro, pumpAddon: order.pumpAddon },
     );
     return this.prisma.order.update({
       where: { id: orderId },
@@ -237,7 +278,10 @@ export class OrdersService {
     });
   }
 
-  /** CREATED → ACCEPTED (SPEC §7). */
+  /**
+   * CREATED → ACCEPTED. Приём заказа от заявленного действующего клиента
+   * (`pendingReview`) = его сверка диспетчером → снимаем флаг (STEP3 T4).
+   */
   async acceptOrder(id: string): Promise<Order> {
     const order = await this.transition(
       id,
@@ -245,11 +289,12 @@ export class OrdersService {
       OrderStatus.ACCEPTED,
       { acceptedAt: new Date() },
     );
+    await this.clients.setTaraState(order.clientId, { pendingReview: false });
     this.emitStatusChanged(order);
     return order;
   }
 
-  /** ACCEPTED → DELIVERED (SPEC §7, §8). */
+  /** ACCEPTED → DELIVERED. Доставка начисляет новую тару клиенту (PRODUCT.md). */
   async markDelivered(id: string): Promise<Order> {
     const order = await this.transition(
       id,
@@ -257,8 +302,39 @@ export class OrdersService {
       OrderStatus.DELIVERED,
       { deliveredAt: new Date() },
     );
+    await this.creditTara(order);
     this.emitStatusChanged(order);
     return order;
+  }
+
+  /**
+   * Начисляет клиенту новые баки в оборот при доставке (PRODUCT.md, решение №1):
+   * STARTER_KIT — все баки заказа, REPEAT — добор сверх остатка, OWN_TARA — ноль.
+   * Best-effort: сбой учёта баланса не должен ронять уже состоявшуюся доставку.
+   */
+  private async creditTara(order: Order): Promise<void> {
+    try {
+      const client = await this.clients.getById(order.clientId);
+      const newTara = this.pricing.newTara(
+        order.bottles,
+        order.kind,
+        client?.bottlesOnHand ?? 0,
+      );
+      const data: { bottlesOnHand?: { increment: number }; hasPump?: boolean } =
+        {};
+      if (newTara > 0) data.bottlesOnHand = { increment: newTara };
+      // Стартовый комплект включает помпу — фиксируем у клиента при доставке.
+      if (order.kind === OrderKind.STARTER_KIT) data.hasPump = true;
+      if (Object.keys(data).length === 0) return;
+      await this.prisma.client.update({
+        where: { id: order.clientId },
+        data,
+      });
+    } catch (err) {
+      this.logger.error(
+        `creditTara failed for order ${order.id}: ${(err as Error).message}`,
+      );
+    }
   }
 
   /** CREATED/ACCEPTED → CANCELLED. Доставленный или уже отменённый — нельзя. */
@@ -335,6 +411,18 @@ export class OrdersService {
       where: { clientId, status: { not: OrderStatus.CANCELLED } },
     });
     return activeCount === 0;
+  }
+
+  /**
+   * Тип заказа по состоянию клиента: есть прошлые заказы → REPEAT; первый заказ
+   * при наличии своей тары (`bottlesOnHand>0`, проставлено онбордингом OWN_TARA)
+   * → OWN_TARA; иначе → STARTER_KIT. Так онбординг не нужно протаскивать в сессию.
+   */
+  private async deriveKind(client: Client): Promise<OrderKind> {
+    if (!(await this.isFirstOrder(client.id))) return OrderKind.REPEAT;
+    return client.bottlesOnHand > 0
+      ? OrderKind.OWN_TARA
+      : OrderKind.STARTER_KIT;
   }
 
   /** Смена статуса с проверкой допустимого перехода from → to. */

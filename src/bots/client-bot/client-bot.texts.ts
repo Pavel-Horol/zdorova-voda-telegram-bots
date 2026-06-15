@@ -1,4 +1,4 @@
-import { OrderStatus } from '../../../generated/prisma/enums';
+import { OrderStatus, OrderKind } from '../../../generated/prisma/enums';
 import type {
   Order,
   Address,
@@ -59,6 +59,43 @@ export const texts = {
   /** CHOOSE_QTY — приглашение выбрать количество. */
   chooseQty: 'Сколько бутылей 19 л привезти?',
 
+  /** ONBOARDING — экран выбора для нового клиента (STEP3 T3). */
+  onboarding:
+    'Чтобы посчитать правильно — что у вас уже есть?\n\n' +
+    '🆕 Стартовый комплект — нужны бак, помпа и вода\n' +
+    '💧 Свои баки — нужна вода (помпу добавим, если нет)\n' +
+    '🔁 Я уже ваш клиент — заказывал(а) раньше по телефону\n' +
+    '⚙️ Другое — чужая тара, нестандарт',
+
+  /** Число баков на руках (ветки «свои баки» и «я уже клиент»). */
+  ownTaraCount:
+    'Сколько у вас баков (19 л) на руках? Пришлите числом — на столько посчитаем обмен.',
+
+  /** Некорректный ввод числа баков. */
+  ownTaraInvalid: 'Нужно число от 1. Сколько у вас баков?',
+
+  /** Выбор помпы в стартовом комплекте (T5). */
+  pumpChoice(pumpPrice: number, electroPrice: number): string {
+    return (
+      'Какая помпа в комплекте?\n' +
+      `• Обычная — ${pumpPrice} грн\n` +
+      `• Электрическая — ${electroPrice} грн`
+    );
+  },
+
+  /** Своя тара: есть ли помпа, иначе докупка (T5). */
+  ownPumpAsk(pumpPrice: number): string {
+    return `Помпа у вас есть? Если нет — добавим к заказу (${pumpPrice} грн).`;
+  },
+
+  /** «Другое» — нестандарт, оформляет диспетчер звонком. */
+  onboardingToDispatcher(phone: string): string {
+    return (
+      'Этот случай оформит диспетчер — он свяжется с вами.\n' +
+      `Если удобнее — позвоните: ${phone}`
+    );
+  },
+
   /** Подпись кнопки «Повторить прошлый заказ» (SPEC §6) со склонением. */
   repeatButton(n: number): string {
     return `🔄 Повторить: ${n} ${bottlesWord(n)}`;
@@ -66,15 +103,29 @@ export const texts = {
 
   /**
    * CONFIRM (SPEC §6) — структурированный итог перед созданием заказа.
-   * Ветка по quote.isFirstOrder: первый заказ показывает разбивку стартового
-   * комплекта, повторный — цену за бутыль. Адрес — raw + comment в скобках.
+   * Ветка по quote.kind: STARTER_KIT показывает разбивку стартового комплекта,
+   * остальные — цену за бутыль. Адрес — raw + comment в скобках.
    */
   confirm(quote: OrderQuote, address: Address): string {
     const word = bottlesWord(quote.bottles);
-    const breakdown = quote.isFirstOrder
-      ? `стартовый комплект: залог ${quote.bottles}×${quote.depositPerBottle} + ` +
-        `помпа ${quote.pumpPrice} + вода ${quote.bottles}×${quote.waterStartPrice}`
-      : `по ${quote.perBottle ?? 0} грн`;
+    let breakdown: string;
+    if (quote.kind === OrderKind.STARTER_KIT) {
+      const pump = quote.electro
+        ? `электро-помпа ${quote.electroPumpPrice}`
+        : `помпа ${quote.pumpPrice}`;
+      breakdown =
+        `стартовый комплект: залог ${quote.bottles}×${quote.depositPerBottle} + ` +
+        `${pump} + вода ${quote.bottles}×${quote.waterStartPrice}`;
+    } else if (quote.newTara > 0) {
+      // Добор тары: вода по сетке на всё количество + залог за каждый новый бак.
+      breakdown =
+        `вода ${quote.bottles}×${quote.perBottle ?? 0} + ` +
+        `${quote.newTara} нов. бак ×${quote.depositPerBottle} залог`;
+    } else {
+      breakdown = `по ${quote.perBottle ?? 0} грн`;
+    }
+    // Докупка помпы к своей таре (OWN_TARA без помпы).
+    if (quote.pumpAddon) breakdown += ` + помпа ${quote.pumpPrice}`;
     const comment = address.comment ? ` (${address.comment})` : '';
     return (
       'Хочу заказать:\n' +

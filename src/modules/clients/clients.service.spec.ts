@@ -8,7 +8,7 @@ jest.mock('../../prisma/prisma.service', () => ({ PrismaService: class {} }));
 describe('ClientsService', () => {
   let service: ClientsService;
   let prisma: {
-    client: { findUnique: jest.Mock; create: jest.Mock };
+    client: { findUnique: jest.Mock; create: jest.Mock; update: jest.Mock };
     address: {
       findMany: jest.Mock;
       findFirst: jest.Mock;
@@ -21,7 +21,7 @@ describe('ClientsService', () => {
 
   beforeEach(() => {
     prisma = {
-      client: { findUnique: jest.fn(), create: jest.fn() },
+      client: { findUnique: jest.fn(), create: jest.fn(), update: jest.fn() },
       address: {
         findMany: jest.fn(),
         findFirst: jest.fn(),
@@ -78,6 +78,21 @@ describe('ClientsService', () => {
         data: { clientId: 'c1', raw: 'ул. 2', comment: null, isDefault: true },
       });
       expect(prisma.$transaction).toHaveBeenCalled();
+    });
+  });
+
+  describe('setTaraState', () => {
+    it('перезаписывает баланс тары и помпу клиента', async () => {
+      const updated = { id: 'c1', bottlesOnHand: 3, hasPump: true };
+      prisma.client.update.mockResolvedValue(updated);
+
+      await expect(
+        service.setTaraState('c1', { bottlesOnHand: 3, hasPump: true }),
+      ).resolves.toEqual(updated);
+      expect(prisma.client.update).toHaveBeenCalledWith({
+        where: { id: 'c1' },
+        data: { bottlesOnHand: 3, hasPump: true },
+      });
     });
   });
 
