@@ -18,6 +18,7 @@
     "db:seed": "prisma db seed",
     "db:studio": "prisma studio",
     "lint": "eslint \"{src,apps,libs,test}/**/*.ts\" --fix",
+    "arch:check": "node scripts/arch-check.mjs",
     "test": "jest",
     "test:watch": "jest --watch",
     "test:cov": "jest --coverage",
