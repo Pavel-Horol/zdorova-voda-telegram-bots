@@ -3,16 +3,16 @@ import { ConfigService } from '@nestjs/config';
 import { Bot, type Context, type SessionFlavor } from 'grammy';
 import type { EditablePriceField } from '../../modules/pricing-settings/pricing-settings.service';
 
-/** DI-токен общего инстанса диспетчерского бота. */
+/** DI token for the shared dispatcher bot instance. */
 export const DISPATCHER_BOT = Symbol('DISPATCHER_BOT');
 
 /**
- * Сессия диспетчера. Два режима текстового ввода, взаимоисключающие:
- * редактирование цены (/prices) и редактирование количества в заказе (✏️).
+ * Dispatcher session. Two mutually exclusive text input modes:
+ * price editing (/prices) and quantity editing in an order (✏️).
  */
 export interface DispatcherSession {
   editingPriceField?: EditablePriceField;
-  /** id заказа, для которого ждём новое количество бутылей (flow ✏️ Изменить). */
+  /** id of the order we are awaiting a new bottle quantity for (✏️ Edit flow). */
   editingOrderId?: string;
 }
 
@@ -20,11 +20,11 @@ export type DispatcherContext = Context & SessionFlavor<DispatcherSession>;
 export type DispatcherBot = Bot<DispatcherContext>;
 
 /**
- * Провайдер общего инстанса бота. Зависит ТОЛЬКО от Config — это разрывает цикл
- * Orders → TelegramOrderDispatcher → бот → handlers → Orders: инстанс для
- * отправки отделён от обвязки обработчиков (DispatcherBotService). Оба получают
- * один и тот же синглтон (на один токен — один long-polling).
- * null, если DISPATCHER_BOT_TOKEN не задан (бот не поднимается).
+ * Provider of the shared bot instance. Depends ONLY on Config — this breaks the
+ * cycle Orders → TelegramOrderDispatcher → bot → handlers → Orders: the sending
+ * instance is decoupled from the handler wiring (DispatcherBotService). Both get
+ * the same singleton (one token — one long-polling).
+ * null if DISPATCHER_BOT_TOKEN is not set (the bot does not start).
  */
 export const dispatcherBotProvider: Provider = {
   provide: DISPATCHER_BOT,

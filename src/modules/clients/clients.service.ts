@@ -79,9 +79,9 @@ export class ClientsService {
   }
 
   /**
-   * Проставляет состояние тары/помпы клиента (онбординг OWN_TARA: клиент ввёл
-   * число своих баков; подтверждение «я уже клиент» диспетчером). Перезаписывает,
-   * не инкрементит — это объявленный стартовый баланс, не доставка.
+   * Sets the client's tara/pump state (OWN_TARA onboarding: the client entered the
+   * number of their own bottles; dispatcher confirmation of "I am already a client").
+   * Overwrites, does not increment — this is the declared starting balance, not a delivery.
    */
   setTaraState(
     clientId: string,

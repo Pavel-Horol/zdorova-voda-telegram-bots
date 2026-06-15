@@ -2,9 +2,9 @@ import { Global, Module } from '@nestjs/common';
 import { PrismaService } from './prisma.service';
 
 /**
- * Глобальный модуль доступа к БД.
- * PrismaService экспортируется один раз и доступен во всех модулях
- * без повторного импорта PrismaModule.
+ * Global DB access module.
+ * PrismaService is exported once and available in all modules
+ * without re-importing PrismaModule.
  */
 @Global()
 @Module({

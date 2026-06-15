@@ -1,9 +1,9 @@
 /**
- * Чистая логика FSM клиентского бота (SPEC §6). Без grammY/БД/сайд-эффектов —
- * сюда выносится баго-опасное ветвление, чтобы покрыть его юнит-тестами.
+ * Pure client bot FSM logic (SPEC §6). No grammY/DB/side effects — the bug-prone
+ * branching is moved here so it can be covered by unit tests.
  */
 
-/** Шаги диалога клиента (SPEC §6). Хранятся в in-memory сессии grammY. */
+/** Client dialog steps (SPEC §6). Stored in grammY's in-memory session. */
 export enum Step {
   AwaitContact = 'AWAIT_CONTACT',
   MainMenu = 'MAIN_MENU',
@@ -17,12 +17,12 @@ export enum Step {
   Confirm = 'CONFIRM',
 }
 
-/** Выбор на экране онбординга новичка (PRODUCT.md, STEP3 T3). */
+/** Choice on the new-client onboarding screen (PRODUCT.md, STEP3 T3). */
 export type OnboardingChoice = 'kit' | 'own' | 'existing' | 'other';
 
 /**
- * Парсит выбор онбординга из `callback_data` (`ob:<choice>`). Вход недоверенный —
- * чужой вариант → null (хендлер выходит без действия).
+ * Parses the onboarding choice from `callback_data` (`ob:<choice>`). Input is
+ * untrusted — a foreign value → null (the handler exits without action).
  */
 export function parseOnboardingChoice(raw: string): OnboardingChoice | null {
   switch (raw) {
@@ -37,8 +37,8 @@ export function parseOnboardingChoice(raw: string): OnboardingChoice | null {
 }
 
 /**
- * Парсит число своих баков (OWN_TARA) из текста. Целое `1..MAX_ORDER_QTY` либо
- * null (не число / вне границ) — недоверенный ввод, как {@link parseQty}.
+ * Parses the number of own bottles (OWN_TARA) from text. An integer `1..MAX_ORDER_QTY`
+ * or null (not a number / out of bounds) — untrusted input, like {@link parseQty}.
  */
 export function parseTaraCount(raw: string): number | null {
   const n = Number(raw);
@@ -47,15 +47,15 @@ export function parseTaraCount(raw: string): number | null {
   return n;
 }
 
-/** Выбор помпы в стартовом комплекте (STEP3 T5). */
+/** Pump choice in the starter kit (STEP3 T5). */
 export type PumpChoice = 'std' | 'electro';
 
-/** Парсит выбор помпы из `callback_data` (`pump:std|electro`). */
+/** Parses the pump choice from `callback_data` (`pump:std|electro`). */
 export function parsePumpChoice(raw: string): PumpChoice | null {
   return raw === 'std' || raw === 'electro' ? raw : null;
 }
 
-/** Парсит ответ да/нет (`yn:yes|no`) — напр. «помпа есть?». */
+/** Parses a yes/no answer (`yn:yes|no`) — e.g. "do you have a pump?". */
 export function parseYesNo(raw: string): boolean | null {
   if (raw === 'yes') return true;
   if (raw === 'no') return false;
@@ -63,17 +63,17 @@ export function parseYesNo(raw: string): boolean | null {
 }
 
 /**
- * Верхняя граница объёма заказа. Кнопки дают максимум MAX_QTY (или повтор
- * реального прошлого заказа), так что больше — это подделанный callback. Защита
- * от абсурдных сумм; реальные большие заказы — звонком диспетчеру (SPEC §1, §7).
+ * Upper bound on the order size. Buttons offer at most MAX_QTY (or a repeat of an
+ * actual previous order), so anything larger is a forged callback. Protects against
+ * absurd totals; real large orders go via a call to the dispatcher (SPEC §1, §7).
  */
 export const MAX_ORDER_QTY = 100;
 
 /**
- * Парсит и валидирует количество бутылей из `callback_data` (`qty:N`). Вход
- * недоверенный (SPEC §7): callback можно подделать в обход UI. Возвращает целое
- * `1..MAX_ORDER_QTY` либо `null`, если значение не число, меньше 1 или превышает
- * лимит. Чистая: ни ctx, ни сервисов — решение, исполнение в хендлере.
+ * Parses and validates the bottle quantity from `callback_data` (`qty:N`). Input is
+ * untrusted (SPEC §7): a callback can be forged around the UI. Returns an integer
+ * `1..MAX_ORDER_QTY` or `null` if the value is not a number, less than 1, or exceeds
+ * the limit. Pure: no ctx, no services — decide here, execute in the handler.
  */
 export function parseQty(raw: string): number | null {
   const bottles = Number(raw);
@@ -83,27 +83,27 @@ export function parseQty(raw: string): number | null {
 }
 
 // ===========================================================================
-// Декларативный каркас FSM (SPEC §6). ТОЛЬКО словарь экранов и сигнатуры чистых
-// переходов. Логика переходов пока живёт в client-bot.service.ts — перенос будет
-// отдельным шагом поверх этого словаря. Здесь нет grammY/БД/сайд-эффектов.
+// Declarative FSM skeleton (SPEC §6). ONLY the screen dictionary and the pure
+// transition signatures. The transition logic still lives in client-bot.service.ts —
+// moving it on top of this dictionary is a separate step. No grammY/DB/side effects here.
 // ===========================================================================
 
 /**
- * Экран, на который ведёт переход FSM, + данные для его рендера (если экрану
- * нужны). Дискриминированный юнион по `kind` — единый «выход» всех чистых
- * функций-переходов. Сами переходы РЕШАЮТ, какой экран показать; ИСПОЛНЕНИЕ
- * (отправка сообщения, гашение клавиатур, async-загрузка превью/повтора) — на
- * стороне хендлера. Поэтому данные, требующие похода в БД (цена-превью на
- * confirm, repeatN на choose-qty), сюда НЕ кладём — их грузит хендлер при рендере.
+ * The screen a FSM transition leads to, + the data to render it (if the screen
+ * needs any). A discriminated union by `kind` — the single "exit" of all pure
+ * transition functions. The transitions DECIDE which screen to show; EXECUTION
+ * (sending the message, stripping keyboards, async-loading preview/repeat) is on
+ * the handler's side. Therefore data that requires a DB trip (price preview on
+ * confirm, repeatN on choose-qty) is NOT put here — the handler loads it at render time.
  *
- * Покрытие текущего флоу (PRODUCT.md «Поведение клиентского бота»):
- * - `await-contact`   — /start нового клиента: без контакта дальше не пускаем.
- * - `main-menu`        — известный клиент / выход из сценария; `name` для приветствия.
- * - `address-prompt`   — первый заказ или нет default-адреса: просим адрес.
- * - `comment-prompt`   — после адреса: этаж/домофон (можно «Пропустить»).
- * - `choose-qty`       — выбор количества (+ «Повторить прошлый заказ»).
- * - `confirm`          — превью суммы и подтверждение; `bottles` — выбранное кол-во.
- * - `order-done`       — заказ создан: «Заказ принят, ожидайте».
+ * Coverage of the current flow (PRODUCT.md "Client bot behaviour"):
+ * - `await-contact`   — /start of a new client: no contact, no progress.
+ * - `main-menu`        — known client / exit from the scenario; `name` for the greeting.
+ * - `address-prompt`   — first order or no default address: ask for the address.
+ * - `comment-prompt`   — after the address: floor/intercom (can "Skip").
+ * - `choose-qty`       — quantity selection (+ "Repeat last order").
+ * - `confirm`          — price preview and confirmation; `bottles` — chosen quantity.
+ * - `order-done`       — order created: "Order accepted, please wait".
  */
 export type ScreenIntent =
   | { kind: 'await-contact' }
@@ -118,14 +118,14 @@ export type ScreenIntent =
   | { kind: 'confirm'; bottles: number }
   | { kind: 'order-done' };
 
-/** Все допустимые `kind` экранов — для типобезопасных подмножеств (см. BackTarget). */
+/** All valid screen `kind`s — for type-safe subsets (see BackTarget). */
 export type ScreenKind = ScreenIntent['kind'];
 
 /**
- * Экран, на который ведёт кнопка «Назад». Подмножество {@link ScreenKind}: назад
- * можно вернуться только на экраны сценария заказа (не на confirm/order-done/
- * await-contact). Через `Extract` связано со словарём — удаление kind из
- * ScreenIntent сломает это место на этапе компиляции.
+ * The screen the "Back" button leads to. A subset of {@link ScreenKind}: back can
+ * only return to order-scenario screens (not confirm/order-done/await-contact).
+ * Tied to the dictionary via `Extract` — removing a kind from ScreenIntent breaks
+ * this spot at compile time.
  */
 export type BackTarget = Extract<
   ScreenKind,
@@ -133,14 +133,14 @@ export type BackTarget = Extract<
 >;
 
 /**
- * Решение кнопки «Назад»: по снятому со стека истории шагу (`prev`) и наличию
- * сохранённого адреса выбирает экран. Чистая: данные грузит хендлер и передаёт
- * сюда `hasDefaultAddress` уже готовым (важно лишь для ветки выбора количества).
+ * The "Back" button decision: by the step popped off the history stack (`prev`) and
+ * whether a saved address exists, picks the screen. Pure: the handler loads the data
+ * and passes `hasDefaultAddress` in ready (it only matters for the quantity branch).
  *
- * - пустой стек или возврат в главное меню → главное меню;
- * - адрес/комментарий → соответствующий промпт;
- * - иначе (выбор количества): к выбору количества, но если адреса нет —
- *   обратно к вводу адреса.
+ * - empty stack or returning to the main menu → main menu;
+ * - address/comment → the corresponding prompt;
+ * - otherwise (quantity selection): to quantity selection, but if there is no
+ *   address — back to address input.
  */
 export function resolveBack(
   prev: Step | undefined,
@@ -152,21 +152,21 @@ export function resolveBack(
   return hasDefaultAddress ? 'choose-qty' : 'address-prompt';
 }
 
-// --- Чистые функции-переходы -----------------------------------------------
-// Каждая: на вход — step/валидированный ввод/УЖЕ загруженные данные, на выход —
-// ScreenIntent. Async и сервисы НЕ тащим: данные грузит хендлер (адрес, превью,
-// repeatN), сюда приходят готовыми; исполнение (рендер, гашение клавиатур,
-// запись сессии) — тоже в хендлере. Здесь только РЕШЕНИЕ «какой экран».
+// --- Pure transition functions ---------------------------------------------
+// Each: in — step/validated input/ALREADY loaded data, out — a ScreenIntent. No
+// async or services: the handler loads the data (address, preview, repeatN) and
+// passes it in ready; execution (render, stripping keyboards, writing the session)
+// is also in the handler. Here is only the DECISION "which screen".
 
 /**
- * Переход на входе в сценарий заказа («Заказать воду», из `startOrder`). На вход —
- * наличие default-адреса и количество последнего не-отменённого заказа (грузит
- * хендлер). Решает:
- * - адреса нет → собрать адрес (первый заказ);
- * - адрес есть и был прошлый заказ → сразу подтверждение с прошлым количеством
- *   (повтор в один тап; «Изменить» уводит к выбору количества);
- * - адрес есть, но заказов ещё не было → выбор количества.
- * `!lastBottles` ловит и `null`, и `0`.
+ * Transition on entering the order scenario ("Order water", from `startOrder`). In —
+ * whether a default address exists and the quantity of the last non-cancelled order
+ * (the handler loads it). Decides:
+ * - no address → collect the address (first order);
+ * - address and a previous order → straight to confirmation with the previous quantity
+ *   (one-tap repeat; "Edit" leads to quantity selection);
+ * - address but no orders yet → quantity selection.
+ * `!lastBottles` catches both `null` and `0`.
  */
 export function resolveStartOrder(
   hasDefaultAddress: boolean,
@@ -183,9 +183,9 @@ export function resolveStartOrder(
 }
 
 /**
- * Переход после выбора количества (из `onChooseQty`). На вход — валидированное
- * `bottles` (см. {@link parseQty}) и признак наличия default-адреса. Решает:
- * адреса нет → собрать адрес (первый заказ); есть → к подтверждению с этим кол-вом.
+ * Transition after quantity selection (from `onChooseQty`). In — the validated
+ * `bottles` (see {@link parseQty}) and whether a default address exists. Decides:
+ * no address → collect the address (first order); has one → to confirmation with this quantity.
  */
 export function resolveAfterQty(
   bottles: number,
@@ -196,10 +196,10 @@ export function resolveAfterQty(
 }
 
 /**
- * Переход на экран подтверждения (из `renderConfirm`). На вход — количество из
- * сессии (может быть не задано при рассинхроне). Решает: есть `bottles` →
- * confirm; нет → fallback на выбор количества. `!bottles` (как в исходнике)
- * ловит и `undefined`, и `0`.
+ * Transition to the confirmation screen (from `renderConfirm`). In — the quantity
+ * from the session (may be unset on a desync). Decides: has `bottles` → confirm;
+ * none → fallback to quantity selection. `!bottles` (as in the original) catches
+ * both `undefined` and `0`.
  */
 export function resolveConfirm(
   bottles: number | undefined,
@@ -209,10 +209,10 @@ export function resolveConfirm(
 }
 
 /**
- * Переход после сбора адреса (из `finalizeAddress`). На вход — `addressRaw` из
- * сессии (создание/upsert адреса остаётся в хендлере). Решает: адреса нет →
- * вернуть к вводу адреса; есть → к выбору количества. `!addressRaw` ловит и
- * `undefined`, и пустую строку (как в исходнике).
+ * Transition after collecting the address (from `finalizeAddress`). In — `addressRaw`
+ * from the session (creating/upserting the address stays in the handler). Decides:
+ * no address → return to address input; has one → to quantity selection. `!addressRaw`
+ * catches both `undefined` and the empty string (as in the original).
  */
 export function resolveFinalizeAddress(
   addressRaw: string | undefined,
@@ -222,11 +222,11 @@ export function resolveFinalizeAddress(
 }
 
 /**
- * Маркер недостижимой ветки для исчерпывающих `switch`. Если статически `x` не
- * сузился до `never` (т.е. появился необработанный вариант — напр. новый kind в
- * {@link ScreenIntent}), вызов перестанет компилироваться. В рантайм попадаем
- * только при рассогласовании типов — тогда бросаем с диагностикой.
+ * Marker of an unreachable branch for exhaustive `switch`. If `x` is not statically
+ * narrowed to `never` (i.e. an unhandled variant appeared — e.g. a new kind in
+ * {@link ScreenIntent}), the call stops compiling. We reach it at runtime only on a
+ * type mismatch — then we throw with diagnostics.
  */
 export function assertNever(x: never): never {
-  throw new Error(`Необработанный вариант: ${JSON.stringify(x)}`);
+  throw new Error(`Unhandled variant: ${JSON.stringify(x)}`);
 }

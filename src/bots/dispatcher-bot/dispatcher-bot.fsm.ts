@@ -1,34 +1,34 @@
 /**
- * Чистая логика диспетчерского бота (SPEC §7). Без grammY/БД/сайд-эффектов —
- * сюда вынесено баго-опасное ветвление: маршрутизация текста по режимам ввода
- * (взаимоисключающие правка цены и правка количества) и разбор чисел с
- * границами. Данные грузит хендлер; сюда передаются уже готовые примитивы.
+ * Pure dispatcher bot logic (SPEC §7). No grammY/DB/side effects — the bug-prone
+ * branching is moved here: routing text by input modes (mutually exclusive price
+ * editing and quantity editing) and parsing numbers with bounds. The handler loads
+ * the data; ready primitives are passed in here.
  */
 import type { EditablePriceField } from '../../modules/pricing-settings/pricing-settings.service';
 
-// Подписи reply-кнопок постоянного меню (они же — ключи текстового роутера).
-export const BTN_ORDERS = '📋 Активные';
-export const BTN_PRICES = '💰 Цены';
+// Labels of the persistent menu reply buttons (also the keys of the text router).
+export const BTN_ORDERS = '📋 Активні';
+export const BTN_PRICES = '💰 Ціни';
 export const BTN_STATS = '📊 Статистика';
 
-/** Намерение, к которому сводится входящий текст диспетчера. Исполнение — в хендлере. */
+/** Intent the incoming dispatcher text reduces to. Execution — in the handler. */
 export type DispatcherTextIntent =
   | { kind: 'menu'; action: 'orders' | 'prices' | 'stats' }
   | { kind: 'edit-quantity'; orderId: string }
   | { kind: 'edit-price'; field: EditablePriceField }
   | { kind: 'ignore' };
 
-/** Активный режим текстового ввода (часть сессии диспетчера). */
+/** Active text input mode (part of the dispatcher session). */
 export interface DispatcherInputState {
   editingOrderId?: string;
   editingPriceField?: EditablePriceField;
 }
 
 /**
- * Решает, что означает присланный диспетчером текст (SPEC §7). Порядок ветвления
- * сохранён в точности: кнопки меню имеют приоритет (чтобы «💰 Цены» не ушло как
- * значение цены), затем правка количества заказа важнее правки цены (режимы
- * взаимоисключающие). Если ни кнопка, ни активный режим — текст игнорируется.
+ * Decides what the text sent by the dispatcher means (SPEC §7). The branching
+ * order is preserved exactly: menu buttons take priority (so "💰 Ціни" is not sent
+ * as a price value), then quantity editing wins over price editing (the modes are
+ * mutually exclusive). If neither a button nor an active mode — the text is ignored.
  */
 export function routeDispatcherText(
   text: string,
@@ -53,12 +53,12 @@ export function routeDispatcherText(
   return { kind: 'ignore' };
 }
 
-/** Результат разбора числа из текста: валидное значение или отказ. */
+/** Result of parsing a number from text: a valid value or a rejection. */
 export type ParseResult = { ok: true; value: number } | { ok: false };
 
 /**
- * Разбор количества бутылей при правке заказа (✏️ Изменить). Требуется целое
- * число в диапазоне [1, max]; иначе отказ (хендлер просит ввести заново).
+ * Parses the bottle quantity when editing an order (✏️ Edit). Requires an integer
+ * in the range [1, max]; otherwise reject (the handler asks to re-enter).
  */
 export function parseEditedQuantity(text: string, max: number): ParseResult {
   const value = Number(text);
@@ -69,8 +69,8 @@ export function parseEditedQuantity(text: string, max: number): ParseResult {
 }
 
 /**
- * Разбор нового значения цены (/prices). Требуется целое неотрицательное число
- * (0 допустим — напр. бесплатная доставка/помпа); иначе отказ.
+ * Parses a new price value (/prices). Requires a non-negative integer
+ * (0 is allowed — e.g. free delivery/pump); otherwise reject.
  */
 export function parsePriceValue(text: string): ParseResult {
   const value = Number(text);

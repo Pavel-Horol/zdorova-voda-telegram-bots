@@ -2,8 +2,8 @@ import { Injectable } from '@nestjs/common';
 import type { OrderKind } from '../../../generated/prisma/enums';
 
 /**
- * Набор цен, нужный для расчёта суммы заказа.
- * Структурно совместим с моделью PriceSettings (id/updatedAt не используются).
+ * The set of prices needed to calculate the order total.
+ * Structurally compatible with the PriceSettings model (id/updatedAt unused).
  */
 export interface PriceList {
   price1: number;
@@ -18,13 +18,13 @@ export interface PriceList {
 @Injectable()
 export class PricingService {
   /**
-   * Считает итоговую сумму заказа по его типу (PRODUCT.md «Расчёт суммы»).
+   * Calculates the order total by its kind (PRODUCT.md "Total calculation").
    *
-   * - STARTER_KIT — стартовый комплект: bottles × залог + помпа + bottles × старт-вода.
-   * - OWN_TARA — своя тара: только вода по сетке (залог 0).
-   * - REPEAT — повторный: вода по сетке (добор тары сверх остатка — в T2).
+   * - STARTER_KIT — starter kit: bottles × deposit + pump + bottles × starter water.
+   * - OWN_TARA — own bottles: water by grid only (deposit 0).
+   * - REPEAT — repeat: water by grid (tara top-up above the remainder — in T2).
    *
-   * @throws Error если bottles не целое положительное число (0 бутылей — не заказ).
+   * @throws Error if bottles is not a positive integer (0 bottles — not an order).
    */
   calculateTotal(
     bottles: number,
@@ -39,7 +39,7 @@ export class PricingService {
 
     switch (kind) {
       case 'STARTER_KIT': {
-        // Помпа в комплекте: обычная (250) или электро (270) по выбору клиента.
+        // Pump in the kit: standard (250) or electric (270) per the client's choice.
         const pump = opts.electro ? prices.electroPumpPrice : prices.pumpPrice;
         return (
           bottles * prices.depositPerBottle +
@@ -48,13 +48,13 @@ export class PricingService {
         );
       }
       case 'OWN_TARA':
-        // Своя тара: вода по сетке + докупка помпы (250), если у клиента её нет.
+        // Own bottles: water by grid + pump add-on (250) if the client has none.
         return (
           this.waterByGrid(bottles, prices) +
           (opts.pumpAddon ? prices.pumpPrice : 0)
         );
       case 'REPEAT': {
-        // Вода по сетке на ВСЁ количество + залог за каждый новый бак сверх остатка.
+        // Water by grid for the WHOLE quantity + deposit per new bottle above the remainder.
         const newTara = this.newTara(bottles, kind, bottlesOnHand);
         return (
           this.waterByGrid(bottles, prices) + newTara * prices.depositPerBottle
@@ -66,9 +66,10 @@ export class PricingService {
   }
 
   /**
-   * Сколько баков заказа — новая тара (под залог): STARTER_KIT — все баки;
-   * REPEAT — сверх остатка на руках; OWN_TARA — ноль (тара клиента). Едина для
-   * расчёта суммы и для начисления баланса при доставке (PRODUCT.md «добор тары»).
+   * How many bottles of the order are new tara (under deposit): STARTER_KIT — all
+   * bottles; REPEAT — above the remainder on hand; OWN_TARA — zero (the client's
+   * tara). Shared by the total calculation and the balance credit on delivery
+   * (PRODUCT.md "tara top-up").
    */
   newTara(bottles: number, kind: OrderKind, bottlesOnHand: number): number {
     switch (kind) {
@@ -81,12 +82,12 @@ export class PricingService {
     }
   }
 
-  /** Стоимость воды по сетке города 1 / от 2 / от 6 (PRODUCT.md). */
+  /** Water cost by the city grid 1 / from 2 / from 6 (PRODUCT.md). */
   private waterByGrid(bottles: number, prices: PriceList): number {
     return bottles * this.waterUnitPrice(bottles, prices);
   }
 
-  /** Цена воды за одну бутыль по сетке для заказа из `bottles` штук. */
+  /** Water price per bottle by the grid for an order of `bottles` units. */
   waterUnitPrice(bottles: number, prices: PriceList): number {
     return bottles === 1
       ? prices.price1

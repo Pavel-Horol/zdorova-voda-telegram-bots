@@ -15,45 +15,45 @@ import {
 import { OrderStatus, OrderKind } from '../../../generated/prisma/enums';
 import type { Order, Client, Address } from '../../../generated/prisma/client';
 
-/** Заказ вместе со связанными клиентом и адресом (для рендера у диспетчера). */
+/** An order together with its client and address (for rendering at the dispatcher). */
 export type OrderWithRelations = Order & { client: Client; address: Address };
 
 /**
- * Превью суммы заказа ДО его создания (SPEC §6: экраны CONFIRM_*).
- * Бот рендерит подтверждение по этим данным и сам деньги НЕ считает (CLAUDE.md §1).
+ * Order price preview BEFORE creating it (SPEC §6: CONFIRM_* screens).
+ * The bot renders the confirmation from this data and does NOT compute money itself (CLAUDE.md §1).
  */
 export interface OrderQuote {
   kind: OrderKind;
   bottles: number;
   totalPrice: number;
-  /** Цена воды за бутыль по сетке — для НЕ-комплектного заказа (для текста). */
+  /** Water price per bottle by grid — for a NON-kit order (for the text). */
   perBottle: number | null;
-  /** Сколько баков заказа — новая тара под залог (>0 → добор тары для текста). */
+  /** How many bottles of the order are new tara under deposit (>0 → tara top-up, for the text). */
   newTara: number;
-  /** Залог за бак — для разбивки стартового комплекта. */
+  /** Deposit per bottle — for the starter-kit breakdown. */
   depositPerBottle: number;
-  /** Цена помпы — для разбивки стартового комплекта. */
+  /** Pump price — for the starter-kit breakdown. */
   pumpPrice: number;
-  /** Цена электро-помпы — для разбивки комплекта с электро. */
+  /** Electric pump price — for the electric-kit breakdown. */
   electroPumpPrice: number;
-  /** Старт-вода за бак — для разбивки стартового комплекта. */
+  /** Starter water per bottle — for the starter-kit breakdown. */
   waterStartPrice: number;
-  /** Электро-помпа в комплекте (для текста подтверждения). */
+  /** Electric pump in the kit (for the confirmation text). */
   electro: boolean;
-  /** Докупка помпы к своей таре (для текста подтверждения). */
+  /** Pump add-on for own bottles (for the confirmation text). */
   pumpAddon: boolean;
 }
 
-/** Опции помпы заказа (выбор клиента в онбординге). */
+/** Order pump options (the client's onboarding choice). */
 export interface PumpOptions {
   electro?: boolean;
   pumpAddon?: boolean;
 }
 
 /**
- * Заказы: создание, расчёт суммы (делегирует), смена статусов (SPEC §5, §7, §8).
- * Сервис соединяет clients + pricing-settings + pricing, но сам сумму НЕ считает —
- * это делает PricingService (единственный источник правды, CLAUDE.md §1).
+ * Orders: creation, price calculation (delegated), status transitions (SPEC §5, §7, §8).
+ * The service ties together clients + pricing-settings + pricing, but does NOT compute
+ * the total itself — that is done by PricingService (the single source of truth, CLAUDE.md §1).
  */
 @Injectable()
 export class OrdersService {
@@ -69,8 +69,8 @@ export class OrdersService {
   ) {}
 
   /**
-   * Последние заказы клиента для экрана «Мои заказы» (SPEC §6). Read-only,
-   * новейшие сверху, отменённые включаются (клиент видит и их статус).
+   * The client's latest orders for the "My orders" screen (SPEC §6). Read-only,
+   * newest first, cancelled included (the client sees their status too).
    */
   listByClient(clientId: string, limit = 5): Promise<Order[]> {
     return this.prisma.order.findMany({
@@ -81,9 +81,9 @@ export class OrdersService {
   }
 
   /**
-   * Количество бутылей последнего не-отменённого заказа клиента — для кнопки
-   * «Повторить прошлый заказ» (SPEC §6). null, если повторять нечего (нет заказов
-   * или все отменены — тогда это фактически первый заказ).
+   * The bottle count of the client's last non-cancelled order — for the "Repeat last
+   * order" button (SPEC §6). null if there is nothing to repeat (no orders or all
+   * cancelled — then it is effectively a first order).
    */
   async lastBottles(clientId: string): Promise<number | null> {
     const last = await this.prisma.order.findFirst({
@@ -94,7 +94,7 @@ export class OrdersService {
     return last?.bottles ?? null;
   }
 
-  /** Заказ с клиентом и адресом — для перерисовки сообщения у диспетчера (SPEC §7). */
+  /** Order with client and address — for redrawing the dispatcher's message (SPEC §7). */
   getOrderView(id: string): Promise<OrderWithRelations | null> {
     return this.prisma.order.findUnique({
       where: { id },
@@ -103,9 +103,9 @@ export class OrdersService {
   }
 
   /**
-   * Активные заказы (created/accepted) для команды /orders диспетчера: рабочая
-   * очередь, если пуш уехал вверх по чату. Сначала старые (FIFO). limit —
-   * страховка от флуда сообщениями в чат.
+   * Active orders (created/accepted) for the dispatcher's /orders command: the work
+   * queue if the push scrolled up the chat. Oldest first (FIFO). limit — a safeguard
+   * against flooding the chat with messages.
    */
   listActive(limit = 20): Promise<OrderWithRelations[]> {
     return this.prisma.order.findMany({
@@ -119,9 +119,9 @@ export class OrdersService {
   }
 
   /**
-   * Сводка для /stats (SPEC §7): число заказов и сумма за сегодня и за последние
-   * 7 дней, без отменённых. «Сегодня» — от локальной полуночи, «неделя» —
-   * скользящие 7 суток. Полноценная аналитика — отдельный модуль позже.
+   * Summary for /stats (SPEC §7): order count and total for today and the last 7
+   * days, without cancelled. "Today" — from local midnight, "week" — a rolling
+   * 7 days. Full analytics — a separate module later.
    */
   async stats(): Promise<{
     today: { count: number; sum: number };
@@ -154,9 +154,9 @@ export class OrdersService {
   }
 
   /**
-   * Создаёт заказ со статусом CREATED и зафиксированной totalPrice (SPEC §8).
-   * Цены берутся из PriceSettings на момент оформления и не пересчитываются
-   * задним числом (SPEC §3.3, §4).
+   * Creates an order with CREATED status and a fixed totalPrice (SPEC §8).
+   * Prices are taken from PriceSettings at the moment of ordering and are not
+   * recomputed retroactively (SPEC §3.3, §4).
    */
   async createOrder(
     clientId: string,
@@ -202,10 +202,10 @@ export class OrdersService {
   }
 
   /**
-   * Считает превью суммы для экрана подтверждения (SPEC §6), не создавая заказ.
-   * Использует те же pricing/pricing-settings, что и createOrder — единый
-   * источник правды по сумме (CLAUDE.md §1). perBottle выводится из totalPrice,
-   * чтобы не дублировать выбор ценовой ветки из PricingService.
+   * Computes the price preview for the confirmation screen (SPEC §6) without
+   * creating an order. Uses the same pricing/pricing-settings as createOrder — a
+   * single source of truth for the total (CLAUDE.md §1). perBottle is derived from
+   * totalPrice so as not to duplicate the price-branch choice from PricingService.
    */
   async quote(
     clientId: string,
@@ -243,11 +243,11 @@ export class OrdersService {
   }
 
   /**
-   * Правка количества бутылей в активном заказе диспетчером (SPEC §7, кнопка
-   * «✏️ Изменить»): пересчитывает totalPrice через pricing (по kind заказа
-   * и текущим ценам). Это осознанный ручной оверрайд — фиксация цены при
-   * создании (§4) защищает от АВТО-пересчёта при смене прайса, а не от правки
-   * диспетчером. Разрешено только для created/accepted.
+   * Editing the bottle quantity in an active order by the dispatcher (SPEC §7, the
+   * "✏️ Edit" button): recomputes totalPrice via pricing (by the order's kind and
+   * current prices). This is a deliberate manual override — the price freeze at
+   * creation (§4) protects against AUTO-recompute on a price change, not against a
+   * dispatcher edit. Allowed only for created/accepted.
    */
   async editQuantity(
     orderId: string,
@@ -279,8 +279,8 @@ export class OrdersService {
   }
 
   /**
-   * CREATED → ACCEPTED. Приём заказа от заявленного действующего клиента
-   * (`pendingReview`) = его сверка диспетчером → снимаем флаг (STEP3 T4).
+   * CREATED → ACCEPTED. Accepting an order from a self-claimed existing client
+   * (`pendingReview`) = the dispatcher verifying them → clear the flag (STEP3 T4).
    */
   async acceptOrder(id: string): Promise<Order> {
     const order = await this.transition(
@@ -294,7 +294,7 @@ export class OrdersService {
     return order;
   }
 
-  /** ACCEPTED → DELIVERED. Доставка начисляет новую тару клиенту (PRODUCT.md). */
+  /** ACCEPTED → DELIVERED. Delivery credits new tara to the client (PRODUCT.md). */
   async markDelivered(id: string): Promise<Order> {
     const order = await this.transition(
       id,
@@ -308,9 +308,10 @@ export class OrdersService {
   }
 
   /**
-   * Начисляет клиенту новые баки в оборот при доставке (PRODUCT.md, решение №1):
-   * STARTER_KIT — все баки заказа, REPEAT — добор сверх остатка, OWN_TARA — ноль.
-   * Best-effort: сбой учёта баланса не должен ронять уже состоявшуюся доставку.
+   * Credits new bottles into circulation to the client on delivery (PRODUCT.md,
+   * decision #1): STARTER_KIT — all bottles of the order, REPEAT — the top-up above
+   * the remainder, OWN_TARA — zero. Best-effort: a balance-accounting failure must
+   * not break an already-completed delivery.
    */
   private async creditTara(order: Order): Promise<void> {
     try {
@@ -323,7 +324,7 @@ export class OrdersService {
       const data: { bottlesOnHand?: { increment: number }; hasPump?: boolean } =
         {};
       if (newTara > 0) data.bottlesOnHand = { increment: newTara };
-      // Стартовый комплект включает помпу — фиксируем у клиента при доставке.
+      // The starter kit includes a pump — record it for the client on delivery.
       if (order.kind === OrderKind.STARTER_KIT) data.hasPump = true;
       if (Object.keys(data).length === 0) return;
       await this.prisma.client.update({
@@ -337,7 +338,7 @@ export class OrdersService {
     }
   }
 
-  /** CREATED/ACCEPTED → CANCELLED. Доставленный или уже отменённый — нельзя. */
+  /** CREATED/ACCEPTED → CANCELLED. A delivered or already cancelled one — not allowed. */
   async cancelOrder(id: string): Promise<Order> {
     const order = await this.prisma.order.findUniqueOrThrow({ where: { id } });
     if (
@@ -355,9 +356,9 @@ export class OrdersService {
   }
 
   /**
-   * Оповещает подписчиков о смене статуса заказа диспетчером (клиентский бот
-   * уведомит клиента, SPEC §8). Только для диспетчерских переходов — отмену
-   * клиентом (cancelOwnOrder) сюда НЕ заводим.
+   * Notifies subscribers about an order status change by the dispatcher (the client
+   * bot will notify the client, SPEC §8). Only for dispatcher transitions —
+   * cancellation by the client (cancelOwnOrder) is NOT routed here.
    */
   private emitStatusChanged(order: Order): void {
     const payload: OrderStatusChangedEvent = { order };
@@ -365,11 +366,11 @@ export class OrdersService {
   }
 
   /**
-   * Отмена заказа самим клиентом из бота (SPEC §9). Разрешена только пока
-   * диспетчер не принял (статус CREATED) и только для своего заказа (проверка
-   * владельца по clientId — callback можно подделать, CLAUDE.md прав. 8).
-   * После отмены шлём диспетчеру уведомление best-effort: его сбой не отменяет
-   * саму отмену (прав. 9 — отмена для клиента уже состоялась).
+   * Cancellation of an order by the client themselves from the bot (SPEC §9).
+   * Allowed only while the dispatcher has not accepted (CREATED status) and only for
+   * their own order (owner check by clientId — a callback can be forged, CLAUDE.md
+   * rule 8). After cancellation we notify the dispatcher best-effort: its failure
+   * does not undo the cancellation (rule 9 — for the client it already happened).
    */
   async cancelOwnOrder(orderId: string, clientId: string): Promise<Order> {
     const order = await this.prisma.order.findUniqueOrThrow({
@@ -383,7 +384,7 @@ export class OrdersService {
         `client cannot cancel order ${orderId} in status ${order.status}`,
       );
     }
-    // where включает status — атомарный гард от гонки с принятием диспетчером.
+    // where includes status — an atomic guard against a race with dispatcher accept.
     const cancelled = await this.prisma.order.update({
       where: { id: orderId, status: OrderStatus.CREATED },
       data: { status: OrderStatus.CANCELLED },
@@ -403,8 +404,8 @@ export class OrdersService {
   }
 
   /**
-   * Первый заказ = у клиента нет ни одного заказа со статусом, отличным от
-   * CANCELLED (SPEC §5). Отменённые заказы «не считаются».
+   * First order = the client has no order with a status other than CANCELLED
+   * (SPEC §5). Cancelled orders "don't count".
    */
   private async isFirstOrder(clientId: string): Promise<boolean> {
     const activeCount = await this.prisma.order.count({
@@ -414,9 +415,9 @@ export class OrdersService {
   }
 
   /**
-   * Тип заказа по состоянию клиента: есть прошлые заказы → REPEAT; первый заказ
-   * при наличии своей тары (`bottlesOnHand>0`, проставлено онбордингом OWN_TARA)
-   * → OWN_TARA; иначе → STARTER_KIT. Так онбординг не нужно протаскивать в сессию.
+   * Order kind by the client's state: has past orders → REPEAT; a first order with
+   * own bottles (`bottlesOnHand>0`, set by OWN_TARA onboarding) → OWN_TARA; otherwise
+   * → STARTER_KIT. This way the onboarding need not be carried into the session.
    */
   private async deriveKind(client: Client): Promise<OrderKind> {
     if (!(await this.isFirstOrder(client.id))) return OrderKind.REPEAT;
@@ -425,7 +426,7 @@ export class OrdersService {
       : OrderKind.STARTER_KIT;
   }
 
-  /** Смена статуса с проверкой допустимого перехода from → to. */
+  /** Status change with a validity check of the from → to transition. */
   private async transition(
     id: string,
     from: OrderStatus,

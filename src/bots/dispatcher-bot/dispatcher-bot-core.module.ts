@@ -2,9 +2,9 @@ import { Module } from '@nestjs/common';
 import { DISPATCHER_BOT, dispatcherBotProvider } from './dispatcher-bot.bot';
 
 /**
- * Общий инстанс диспетчерского бота как отдельный модуль: его импортируют и
- * OrdersModule (для отправки уведомлений через TelegramOrderDispatcher), и
- * DispatcherBotModule (для приёма команд/кнопок). Один Bot на оба направления.
+ * The shared dispatcher bot instance as a separate module: imported by both
+ * OrdersModule (to send notifications via TelegramOrderDispatcher) and
+ * DispatcherBotModule (to handle commands/buttons). One Bot for both directions.
  */
 @Module({
   providers: [dispatcherBotProvider],

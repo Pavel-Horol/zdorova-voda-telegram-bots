@@ -6,166 +6,167 @@ import type {
 } from '../../../generated/prisma/client';
 import type { OrderQuote } from '../../modules/orders/orders.service';
 
-/** Русское склонение слова «бутыль» по числу (1 бутыль / 2 бутыли / 5 бутылей). */
+/** Ukrainian plural form of "бутель" by count (1 бутель / 2 бутлі / 5 бутлів). */
 function bottlesWord(n: number): string {
   const mod10 = n % 10;
   const mod100 = n % 100;
-  if (mod10 === 1 && mod100 !== 11) return 'бутыль';
-  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return 'бутыли';
-  return 'бутылей';
+  if (mod10 === 1 && mod100 !== 11) return 'бутель';
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return 'бутлі';
+  return 'бутлів';
 }
 
-/** Дата заказа в коротком формате ДД.ММ для списка «Мои заказы». */
+/** Order date in short DD.MM format for the "My orders" list. */
 function shortDate(d: Date): string {
   const day = String(d.getDate()).padStart(2, '0');
   const month = String(d.getMonth() + 1).padStart(2, '0');
   return `${day}.${month}`;
 }
 
-/** Статус заказа для клиента (короткая подпись, не путать с диспетчерской). */
+/** Order status for the client (short label, not the dispatcher one). */
 const STATUS_LABEL: Record<OrderStatus, string> = {
-  [OrderStatus.CREATED]: '🆕 принят',
-  [OrderStatus.ACCEPTED]: '✅ подтверждён',
-  [OrderStatus.DELIVERED]: '🚚 доставлен',
-  [OrderStatus.CANCELLED]: '❌ отменён',
+  [OrderStatus.CREATED]: '🆕 прийнято',
+  [OrderStatus.ACCEPTED]: '✅ підтверджено',
+  [OrderStatus.DELIVERED]: '🚚 доставлено',
+  [OrderStatus.CANCELLED]: '❌ скасовано',
 };
 
 /**
- * Тексты экранов клиентского бота (SPEC §6). Чистые функции без побочных
- * эффектов — деньги и количества приходят готовыми из OrderQuote (CLAUDE.md §1).
+ * Client bot screen texts (SPEC §6). Pure functions without side effects —
+ * money and quantities arrive ready from OrderQuote (CLAUDE.md §1).
  */
 export const texts = {
   /** AWAIT_CONTACT (SPEC §6). */
   awaitContact:
-    'Привет! 💧 Чтобы оформить заказ, поделитесь номером телефона — ' +
-    'по нему мы определим ваш адрес доставки.',
+    'Вітаємо! 💧 Щоб оформити замовлення, поділіться номером телефону — ' +
+    'за ним ми визначимо вашу адресу доставки.',
 
-  /** Главное меню для уже известного клиента (текст над reply-клавиатурой). */
+  /** Main menu for an already known client (text above the reply keyboard). */
   mainMenu(name: string | null): string {
-    const hello = name ? `С возвращением, ${name}! 👋` : 'С возвращением! 👋';
-    return `${hello}\nЧем поможем?`;
+    const hello = name ? `З поверненням, ${name}! 👋` : 'З поверненням! 👋';
+    return `${hello}\nЧим допоможемо?`;
   },
 
-  /** AWAIT_ADDRESS — первый заказ (SPEC §6). */
+  /** AWAIT_ADDRESS — first order (SPEC §6). */
   awaitAddress:
-    'Похоже, вы заказываете впервые 👋 Укажите адрес доставки: улица, дом, ' +
-    'квартира. Если есть — добавьте этаж, код домофона, ориентир.',
+    'Схоже, ви замовляєте вперше 👋 Вкажіть адресу доставки: вулиця, будинок, ' +
+    'квартира. Якщо є — додайте поверх, код домофона, орієнтир.',
 
-  /** AWAIT_COMMENT — комментарий к адресу (этаж/домофон/ориентир), необязателен. */
+  /** AWAIT_COMMENT — address details (floor/intercom/landmark), optional. */
   awaitComment:
-    'Добавьте детали к адресу: этаж, код домофона, ориентир — или нажмите ' +
-    '«Пропустить».',
+    'Додайте деталі до адреси: поверх, код домофона, орієнтир — або натисніть ' +
+    '«Пропустити».',
 
-  /** CHOOSE_QTY — приглашение выбрать количество. */
-  chooseQty: 'Сколько бутылей 19 л привезти?',
+  /** CHOOSE_QTY — prompt to choose the quantity. */
+  chooseQty: 'Скільки бутлів 19 л привезти?',
 
-  /** ONBOARDING — экран выбора для нового клиента (STEP3 T3). */
+  /** ONBOARDING — choice screen for a new client (STEP3 T3). */
   onboarding:
-    'Чтобы посчитать правильно — что у вас уже есть?\n\n' +
-    '🆕 Стартовый комплект — нужны бак, помпа и вода\n' +
-    '💧 Свои баки — нужна вода (помпу добавим, если нет)\n' +
-    '🔁 Я уже ваш клиент — заказывал(а) раньше по телефону\n' +
-    '⚙️ Другое — чужая тара, нестандарт',
+    'Щоб порахувати правильно — що у вас уже є?\n\n' +
+    '🆕 Стартовий комплект — потрібні бак, помпа та вода\n' +
+    '💧 Свої баки — потрібна вода (помпу додамо, якщо немає)\n' +
+    '🔁 Я вже ваш клієнт — замовляв(ла) раніше телефоном\n' +
+    '⚙️ Інше — чужа тара, нестандарт',
 
-  /** Число баков на руках (ветки «свои баки» и «я уже клиент»). */
+  /** Number of bottles on hand (branches "own bottles" and "already a client"). */
   ownTaraCount:
-    'Сколько у вас баков (19 л) на руках? Пришлите числом — на столько посчитаем обмен.',
+    'Скільки у вас баків (19 л) на руках? Надішліть числом — на стільки порахуємо обмін.',
 
-  /** Некорректный ввод числа баков. */
-  ownTaraInvalid: 'Нужно число от 1. Сколько у вас баков?',
+  /** Invalid number of bottles. */
+  ownTaraInvalid: 'Потрібне число від 1. Скільки у вас баків?',
 
-  /** Выбор помпы в стартовом комплекте (T5). */
+  /** Pump choice in the starter kit (T5). */
   pumpChoice(pumpPrice: number, electroPrice: number): string {
     return (
-      'Какая помпа в комплекте?\n' +
-      `• Обычная — ${pumpPrice} грн\n` +
-      `• Электрическая — ${electroPrice} грн`
+      'Яка помпа в комплекті?\n' +
+      `• Звичайна — ${pumpPrice} грн\n` +
+      `• Електрична — ${electroPrice} грн`
     );
   },
 
-  /** Своя тара: есть ли помпа, иначе докупка (T5). */
+  /** Own bottles: do you have a pump, otherwise add-on purchase (T5). */
   ownPumpAsk(pumpPrice: number): string {
-    return `Помпа у вас есть? Если нет — добавим к заказу (${pumpPrice} грн).`;
+    return `Помпа у вас є? Якщо ні — додамо до замовлення (${pumpPrice} грн).`;
   },
 
-  /** «Другое» — нестандарт, оформляет диспетчер звонком. */
+  /** "Other" — non-standard, handled by the dispatcher via a call. */
   onboardingToDispatcher(phone: string): string {
     return (
-      'Этот случай оформит диспетчер — он свяжется с вами.\n' +
-      `Если удобнее — позвоните: ${phone}`
+      'Цей випадок оформить диспетчер — він зв’яжеться з вами.\n' +
+      `Якщо зручніше — зателефонуйте: ${phone}`
     );
   },
 
-  /** Подпись кнопки «Повторить прошлый заказ» (SPEC §6) со склонением. */
+  /** Label of the "Repeat last order" button (SPEC §6) with plural form. */
   repeatButton(n: number): string {
-    return `🔄 Повторить: ${n} ${bottlesWord(n)}`;
+    return `🔄 Повторити: ${n} ${bottlesWord(n)}`;
   },
 
   /**
-   * CONFIRM (SPEC §6) — структурированный итог перед созданием заказа.
-   * Ветка по quote.kind: STARTER_KIT показывает разбивку стартового комплекта,
-   * остальные — цену за бутыль. Адрес — raw + comment в скобках.
+   * CONFIRM (SPEC §6) — structured summary before creating the order.
+   * Branches on quote.kind: STARTER_KIT shows the starter-kit breakdown, the
+   * rest — price per bottle. Address — raw + comment in parentheses.
    */
   confirm(quote: OrderQuote, address: Address): string {
     const word = bottlesWord(quote.bottles);
     let breakdown: string;
     if (quote.kind === OrderKind.STARTER_KIT) {
       const pump = quote.electro
-        ? `электро-помпа ${quote.electroPumpPrice}`
+        ? `електро-помпа ${quote.electroPumpPrice}`
         : `помпа ${quote.pumpPrice}`;
       breakdown =
-        `стартовый комплект: залог ${quote.bottles}×${quote.depositPerBottle} + ` +
+        `стартовий комплект: застава ${quote.bottles}×${quote.depositPerBottle} + ` +
         `${pump} + вода ${quote.bottles}×${quote.waterStartPrice}`;
     } else if (quote.newTara > 0) {
-      // Добор тары: вода по сетке на всё количество + залог за каждый новый бак.
+      // Tara top-up: water by grid for the whole quantity + deposit per new bottle.
       breakdown =
         `вода ${quote.bottles}×${quote.perBottle ?? 0} + ` +
-        `${quote.newTara} нов. бак ×${quote.depositPerBottle} залог`;
+        `${quote.newTara} нов. бак ×${quote.depositPerBottle} застава`;
     } else {
       breakdown = `по ${quote.perBottle ?? 0} грн`;
     }
-    // Докупка помпы к своей таре (OWN_TARA без помпы).
+    // Pump add-on for own bottles (OWN_TARA without a pump).
     if (quote.pumpAddon) breakdown += ` + помпа ${quote.pumpPrice}`;
     const comment = address.comment ? ` (${address.comment})` : '';
     return (
-      'Хочу заказать:\n' +
+      'Хочу замовити:\n' +
       `📦 ${quote.bottles} ${word} (${breakdown})\n` +
       `📍 ${address.raw}${comment}\n` +
-      `💰 К оплате: ${quote.totalPrice} грн (наличными водителю)`
+      `💰 До сплати: ${quote.totalPrice} грн (готівкою водієві)`
     );
   },
 
   /** ORDER_DONE (SPEC §6). */
-  orderDone: 'Заказ принят ✅ Скоро с вами свяжутся / привезут воду. Спасибо!',
+  orderDone:
+    'Замовлення прийнято ✅ Незабаром з вами зв’яжуться / привезуть воду. Дякуємо!',
 
   /**
-   * Уведомление клиенту о смене статуса заказа диспетчером (SPEC §8).
-   * Для CREATED возвращает null — это исходный статус, о нём не уведомляем.
+   * Notify the client about an order status change by the dispatcher (SPEC §8).
+   * For CREATED returns null — it is the initial status, we do not notify about it.
    */
   orderStatusUpdate(order: Order): string | null {
     switch (order.status) {
       case OrderStatus.ACCEPTED:
-        return 'Ваш заказ принят ✅ Готовим к доставке.';
+        return 'Ваше замовлення прийнято ✅ Готуємо до доставки.';
       case OrderStatus.DELIVERED:
-        return 'Заказ доставлен 🚚 Спасибо, что выбрали нас!';
+        return 'Замовлення доставлено 🚚 Дякуємо, що обрали нас!';
       case OrderStatus.CANCELLED:
-        return 'Ваш заказ отменён. Если это ошибка — свяжитесь с нами.';
+        return 'Ваше замовлення скасовано. Якщо це помилка — зв’яжіться з нами.';
       default:
         return null;
     }
   },
 
-  /** Сбой создания заказа — просим повторить (edge §9). */
+  /** Order creation failed — ask to retry (edge §9). */
   orderError:
-    'Не удалось оформить заказ 😔 Попробуйте ещё раз или позвоните нам.',
+    'Не вдалося оформити замовлення 😔 Спробуйте ще раз або зателефонуйте нам.',
 
-  /** На шагах ввода прислали не текст (фото/гео/голос) — просим текстом. */
-  sendAsText: 'Пришлите, пожалуйста, текстом 🙏',
+  /** A non-text was sent on input steps (photo/geo/voice) — ask for text. */
+  sendAsText: 'Надішліть, будь ласка, текстом 🙏',
 
-  /** Отказ от подтверждения / отмена сценария — возврат в меню. */
-  orderCancelled: 'Заказ отменён. Можно оформить заново в любой момент.',
+  /** Declining confirmation / cancelling the scenario — return to the menu. */
+  orderCancelled: 'Замовлення скасовано. Можна оформити заново будь-коли.',
 
-  /** HISTORY — последние заказы клиента (SPEC §6, «Мои заказы»). */
+  /** HISTORY — the client's latest orders (SPEC §6, "My orders"). */
   history(orders: Order[]): string {
     const lines = orders.map((o) => {
       const word = bottlesWord(o.bottles);
@@ -174,37 +175,37 @@ export const texts = {
         `${o.totalPrice} грн — ${STATUS_LABEL[o.status]}`
       );
     });
-    return `📋 Ваши последние заказы:\n${lines.join('\n')}`;
+    return `📋 Ваші останні замовлення:\n${lines.join('\n')}`;
   },
 
-  /** HISTORY — у клиента ещё нет заказов. */
+  /** HISTORY — the client has no orders yet. */
   historyEmpty:
-    'У вас пока нет заказов. Нажмите «🚰 Заказать воду», чтобы оформить первый.',
+    'У вас поки немає замовлень. Натисніть «🚰 Замовити воду», щоб оформити перше.',
 
-  /** PRICES — текущая сетка цен для клиента (SPEC §6, «Цены»). */
+  /** PRICES — the current price grid for the client (SPEC §6, "Prices"). */
   prices(p: PriceSettings): string {
     return (
-      '💰 Наши цены (бутыль 19 л):\n' +
-      `• 1 бутыль — ${p.price1} грн\n` +
-      `• от 2 — ${p.priceFrom2} грн/шт\n` +
-      `• от 6 — ${p.priceFrom6} грн/шт\n\n` +
-      'Первый заказ (стартовый комплект):\n' +
-      `• залог ${p.depositPerBottle} грн/бак + помпа ${p.pumpPrice} грн ` +
+      '💰 Наші ціни (бутель 19 л):\n' +
+      `• 1 бутель — ${p.price1} грн\n` +
+      `• від 2 — ${p.priceFrom2} грн/шт\n` +
+      `• від 6 — ${p.priceFrom6} грн/шт\n\n` +
+      'Перше замовлення (стартовий комплект):\n' +
+      `• застава ${p.depositPerBottle} грн/бак + помпа ${p.pumpPrice} грн ` +
       `+ старт-вода ${p.waterStartPrice} грн/бак\n\n` +
-      'Оплата наличными водителю.'
+      'Оплата готівкою водієві.'
     );
   },
 
-  /** CONTACTS — телефон поддержки (SPEC §6, «Связаться»; §11 — заглушка). */
+  /** CONTACTS — support phone (SPEC §6, "Contact us"; §11 — placeholder). */
   contacts(phone: string): string {
     return (
-      '📞 Связаться с нами:\n' +
+      '📞 Зв’язатися з нами:\n' +
       `${phone}\n\n` +
-      'Звоните, если нужна помощь с заказом или есть вопросы.'
+      'Телефонуйте, якщо потрібна допомога із замовленням або є запитання.'
     );
   },
 
-  /** Клиент прислал не свой контакт (edge-кейс SPEC §9). */
+  /** The client shared someone else's contact (edge case SPEC §9). */
   foreignContact:
-    'Нужен именно ваш номер. Нажмите кнопку «Поделиться номером» ниже 🙏',
+    'Потрібен саме ваш номер. Натисніть кнопку «Поділитися номером» нижче 🙏',
 } as const;

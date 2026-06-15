@@ -1,13 +1,13 @@
 // This is your Prisma schema file,
 // learn more about it in the docs: https://pris.ly/d/prisma-schema
-// Модель данных и расчёт цены — PRODUCT.md (расчёт суммы — только в pricing.service).
+// Data model and price calculation — PRODUCT.md (total calculation — only in pricing.service).
 
 generator client {
   provider     = "prisma-client"
   output       = "../generated/prisma"
-  // Проект компилируется в CommonJS (tsconfig module=nodenext, без "type":"module").
-  // Без этого новый генератор Prisma 7 выдаёт ESM-исходники с import.meta.url,
-  // которые ломаются в рантайме под Node ("exports is not defined in ES module scope").
+  // The project compiles to CommonJS (tsconfig module=nodenext, no "type":"module").
+  // Without this the new Prisma 7 generator emits ESM sources with import.meta.url,
+  // which break at runtime under Node ("exports is not defined in ES module scope").
   moduleFormat = "cjs"
 }
 
@@ -15,7 +15,7 @@ datasource db {
   provider = "postgresql"
 }
 
-/// Статусы заказа (PRODUCT.md «Сквозной путь заказа»).
+/// Order statuses (PRODUCT.md "End-to-end order path").
 enum OrderStatus {
   CREATED
   ACCEPTED
@@ -23,35 +23,35 @@ enum OrderStatus {
   CANCELLED
 }
 
-/// Тип заказа — определяет расчёт суммы (PRODUCT.md «Ценообразование»).
-/// STARTER_KIT — стартовый комплект; OWN_TARA — своя тара (вода, залог 0);
-/// REPEAT — повторный (сетка + добор тары сверх остатка).
+/// Order kind — determines the total calculation (PRODUCT.md "Pricing").
+/// STARTER_KIT — starter kit; OWN_TARA — own bottles (water, deposit 0);
+/// REPEAT — repeat (grid + tara top-up above the remainder).
 enum OrderKind {
   STARTER_KIT
   OWN_TARA
   REPEAT
 }
 
-/// Клиент бота. Идентифицируется по Telegram-аккаунту и телефону.
+/// Bot client. Identified by Telegram account and phone.
 model Client {
   id         String   @id @default(uuid())
-  /// Telegram user id — bigint, не int32 (легко переваливает за 2^31).
+  /// Telegram user id — bigint, not int32 (easily exceeds 2^31).
   telegramId BigInt   @unique
   phone      String   @unique
   name       String?
   createdAt  DateTime @default(now())
-  /// Состояние тары/помпы клиента (PRODUCT.md): для добора тары и пропуска онбординга.
+  /// Client tara/pump state (PRODUCT.md): for tara top-up and skipping onboarding.
   bottlesOnHand Int     @default(0)
   hasPump       Boolean @default(false)
-  /// Клиент заявил, что уже действующий («я уже ваш клиент»), но диспетчер ещё не
-  /// сверил. Снимается при приёме его заказа диспетчером (PRODUCT.md, STEP3 T4).
+  /// The client claimed to be already existing ("I am already your client"), but the
+  /// dispatcher has not verified yet. Cleared when their order is accepted (PRODUCT.md, STEP3 T4).
   pendingReview Boolean @default(false)
 
   addresses Address[]
   orders    Order[]
 }
 
-/// Адрес доставки. На старте обычно один (isDefault), модель допускает несколько.
+/// Delivery address. Usually one at the start (isDefault), the model allows several.
 model Address {
   id        String   @id @default(uuid())
   clientId  String
@@ -66,19 +66,19 @@ model Address {
   @@index([clientId])
 }
 
-/// Заказ. totalPrice фиксируется на момент оформления и не пересчитывается (SPEC §4).
+/// Order. totalPrice is frozen at ordering time and not recomputed (SPEC §4).
 model Order {
   id           String      @id @default(uuid())
   clientId     String
   addressId    String
   bottles      Int
-  /// Тип заказа (PRODUCT.md): определяет расчёт суммы в pricing.service.
+  /// Order kind (PRODUCT.md): determines the total calculation in pricing.service.
   kind         OrderKind
-  /// Стартовый комплект с электро-помпой (270 вместо 250). STEP3 T5.
+  /// Starter kit with an electric pump (270 instead of 250). STEP3 T5.
   electro      Boolean     @default(false)
-  /// OWN_TARA с докупкой помпы (+250), если у клиента её нет. STEP3 T5.
+  /// OWN_TARA with a pump add-on (+250) if the client has none. STEP3 T5.
   pumpAddon    Boolean     @default(false)
-  /// Зафиксированная сумма заказа в гривнах (целое, без копеек).
+  /// Frozen order total in UAH (integer, no kopecks).
   totalPrice   Int
   status       OrderStatus @default(CREATED)
   createdAt    DateTime    @default(now())
@@ -92,15 +92,15 @@ model Order {
   @@index([status])
 }
 
-/// Настройки цен — синглтон (одна строка на всю систему).
-/// id всегда = 1; сид создаёт строку с дефолтами (PRODUCT.md «Ценообразование»).
+/// Price settings — a singleton (one row for the whole system).
+/// id is always = 1; the seed creates the row with defaults (PRODUCT.md "Pricing").
 model PriceSettings {
   id               Int      @id @default(1)
-  /// Сетка воды (город) по количеству: 1 / от 2 / от 6.
+  /// Water grid (city) by quantity: 1 / from 2 / from 6.
   price1           Int      @default(80)
   priceFrom2       Int      @default(70)
   priceFrom6       Int      @default(65)
-  /// Компоненты стартового комплекта и докупки: залог, помпа, электро-помпа, старт-вода.
+  /// Starter-kit and add-on components: deposit, pump, electric pump, starter water.
   depositPerBottle Int      @default(450)
   pumpPrice        Int      @default(250)
   electroPumpPrice Int      @default(270)

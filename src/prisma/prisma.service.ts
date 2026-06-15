@@ -3,11 +3,11 @@ import { PrismaPg } from '@prisma/adapter-pg';
 import { PrismaClient } from '../../generated/prisma/client';
 
 /**
- * Тонкая обёртка над сгенерированным PrismaClient.
- * Prisma 7: подключение к Postgres идёт через driver adapter (@prisma/adapter-pg),
- * строка подключения берётся из DATABASE_URL. Подключается при старте модуля и
- * закрывает соединение при остановке. Доступ к данным из сервисов — через
- * репозитории/методы модулей (см. CLAUDE.md §6).
+ * A thin wrapper over the generated PrismaClient.
+ * Prisma 7: the Postgres connection goes through a driver adapter (@prisma/adapter-pg),
+ * the connection string is taken from DATABASE_URL. Connects on module start and
+ * closes the connection on stop. Data access from services — via the module
+ * repositories/methods (see CLAUDE.md §6).
  */
 @Injectable()
 export class PrismaService

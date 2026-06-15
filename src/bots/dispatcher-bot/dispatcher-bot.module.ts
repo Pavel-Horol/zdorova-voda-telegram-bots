@@ -5,9 +5,9 @@ import { DispatcherBotCoreModule } from './dispatcher-bot-core.module';
 import { DispatcherBotService } from './dispatcher-bot.service';
 
 /**
- * Диспетчерский бот (SPEC §7). Общий инстанс берёт из DispatcherBotCoreModule
- * (тот же, что шлёт уведомления), бизнес-операции — через OrdersService и
- * PricingSettingsService. Прямого доступа к Prisma у бота нет (CLAUDE.md §6).
+ * Dispatcher bot (SPEC §7). Takes the shared instance from DispatcherBotCoreModule
+ * (the same one that sends notifications); business operations — via OrdersService
+ * and PricingSettingsService. The bot has no direct Prisma access (CLAUDE.md §6).
  */
 @Module({
   imports: [DispatcherBotCoreModule, OrdersModule, PricingSettingsModule],

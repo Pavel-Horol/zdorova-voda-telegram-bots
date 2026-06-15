@@ -40,7 +40,7 @@ import {
   type ScreenIntent,
 } from './client-bot.fsm';
 
-/** Шаги активного сценария заказа — на них действует «Назад»/«Отмена» (SPEC §6). */
+/** Steps of the active order scenario — "Back"/"Cancel" act on them (SPEC §6). */
 const ORDER_FLOW_STEPS: readonly Step[] = [
   Step.Onboarding,
   Step.PumpChoice,
@@ -54,58 +54,59 @@ const ORDER_FLOW_STEPS: readonly Step[] = [
 
 interface SessionData {
   step: Step;
-  /** Выбранное количество бутылей, переносится из CHOOSE_QTY в CONFIRM. */
+  /** Chosen number of bottles, carried from CHOOSE_QTY to CONFIRM. */
   bottles?: number;
   /**
-   * Адрес (raw), введённый на AWAIT_ADDRESS, до сбора комментария на
-   * AWAIT_COMMENT. Address создаётся одной записью только после шага комментария.
+   * Address (raw) entered at AWAIT_ADDRESS, before the comment is collected at
+   * AWAIT_COMMENT. The Address is created as a single record only after the comment step.
    */
   addressRaw?: string;
   /**
-   * Стек предыдущих шагов сценария заказа для кнопки «Назад» (SPEC §6).
-   * Пушатся только inline-переходы внутри флоу; reply-кнопки стек обнуляют.
+   * Stack of previous order-scenario steps for the "Back" button (SPEC §6).
+   * Only inline transitions inside the flow are pushed; reply buttons reset the stack.
    */
   history: Step[];
   /**
-   * Онбординг «🔁 Я уже ваш клиент»: ввод числа баков идёт тем же шагом, что и
-   * «свои баки», но проставляет клиенту `pendingReview` (диспетчер сверит).
+   * Onboarding "🔁 I am already your client": entering the bottle count goes
+   * through the same step as "own bottles", but marks the client `pendingReview`
+   * (the dispatcher will verify).
    */
   existingClient?: boolean;
-  /** Электро-помпа в стартовом комплекте (T5). */
+  /** Electric pump in the starter kit (T5). */
   electro?: boolean;
-  /** Докупка помпы к своей таре (T5, ответ «нет помпы»). */
+  /** Pump add-on for own bottles (T5, answer "no pump"). */
   pumpAddon?: boolean;
   /**
-   * message_id последнего отправленного inline-экрана сценария. При любом
-   * переходе с него снимаем клавиатуру, чтобы в чате не висели «мёртвые» кнопки
-   * (тап по ним и так заблокирован гардами по step, но визуально путает).
+   * message_id of the last sent inline scenario screen. On any transition away
+   * from it we strip the keyboard so no "dead" buttons hang in the chat (tapping
+   * them is already blocked by step guards, but it looks confusing).
    */
   activeInlineMessageId?: number;
 }
 
 type BotContext = Context & SessionFlavor<SessionData>;
 
-// Идентификаторы callback-кнопок.
+// Callback button identifiers.
 const CB_CONFIRM_YES = 'confirm:yes';
 const CB_BACK = 'nav:back';
 const CB_CANCEL = 'nav:cancel';
 const CB_SKIP = 'nav:skip';
 
-// Подписи reply-кнопок главного меню (они же — ключи текстового роутера).
-const BTN_ORDER = '🚰 Заказать воду';
-const BTN_HISTORY = '📋 Мои заказы';
-const BTN_PRICES = '💰 Цены';
-const BTN_CONTACTS = '📞 Связаться';
+// Reply button labels of the main menu (also the keys of the text router).
+const BTN_ORDER = '🚰 Замовити воду';
+const BTN_HISTORY = '📋 Мої замовлення';
+const BTN_PRICES = '💰 Ціни';
+const BTN_CONTACTS = '📞 Зв’язатися';
 
-/** Максимум бутылей кнопками (3+ всё равно идёт по одной цене, SPEC §3.1). */
+/** Max bottles via buttons (3+ still goes at the same price, SPEC §3.1). */
 const MAX_QTY = 5;
 
 const contactKeyboard = new Keyboard()
-  .requestContact('📱 Поделиться номером')
+  .requestContact('📱 Поділитися номером')
   .resized()
   .oneTime();
 
-/** Постоянное reply-меню — глобальная навигация, видна всегда (SPEC §6). */
+/** Persistent reply menu — global navigation, always visible (SPEC §6). */
 const mainReplyKeyboard = new Keyboard()
   .text(BTN_ORDER)
   .row()
@@ -117,9 +118,9 @@ const mainReplyKeyboard = new Keyboard()
   .persistent();
 
 /**
- * Клавиатура выбора количества (SPEC §6): опц. кнопка «Повторить прошлый заказ»,
- * ряд цифр 1..MAX_QTY, ряд навигации. Кнопка повтора шлёт тот же `qty:N`, что и
- * цифры, поэтому отдельного обработчика не нужно (N может быть и больше MAX_QTY).
+ * Quantity selection keyboard (SPEC §6): optional "Repeat last order" button,
+ * a row of digits 1..MAX_QTY, a navigation row. The repeat button sends the same
+ * `qty:N` as the digits, so no separate handler is needed (N may exceed MAX_QTY).
  */
 function buildQtyKeyboard(repeatN: number | null): InlineKeyboard {
   const kb = new InlineKeyboard();
@@ -129,77 +130,78 @@ function buildQtyKeyboard(repeatN: number | null): InlineKeyboard {
   for (let n = 1; n <= MAX_QTY; n += 1) {
     kb.text(String(n), `qty:${n}`);
   }
-  kb.row().text('◀ Назад', CB_BACK).text('❌ Отмена', CB_CANCEL);
+  kb.row().text('◀ Назад', CB_BACK).text('❌ Скасувати', CB_CANCEL);
   return kb;
 }
 
 /**
- * Кнопки отмены под списком «Мои заказы»: по одной на заказ в статусе CREATED
- * (диспетчер ещё не принял — клиент может отменить сам, SPEC §9). Если отменять
- * нечего — undefined (список идёт обычным текстом без inline-клавиатуры).
+ * Cancel buttons under the "My orders" list: one per order in CREATED status
+ * (the dispatcher has not accepted yet — the client can cancel it, SPEC §9). If
+ * there is nothing to cancel — undefined (the list goes as plain text without an
+ * inline keyboard).
  */
 function buildHistoryKeyboard(orders: Order[]): InlineKeyboard | undefined {
   const cancellable = orders.filter((o) => o.status === OrderStatus.CREATED);
   if (!cancellable.length) return undefined;
   const kb = new InlineKeyboard();
   for (const o of cancellable) {
-    kb.text(`❌ Отменить #${o.id.slice(0, 8)}`, `ocancel:${o.id}`).row();
+    kb.text(`❌ Скасувати #${o.id.slice(0, 8)}`, `ocancel:${o.id}`).row();
   }
   return kb;
 }
 
-/** Под приглашением адреса — только «Отмена» (с первого шага «назад» = выход). */
-const addressKeyboard = new InlineKeyboard().text('❌ Отмена', CB_CANCEL);
+/** Under the address prompt — only "Cancel" (from the first step, "back" = exit). */
+const addressKeyboard = new InlineKeyboard().text('❌ Скасувати', CB_CANCEL);
 
-/** Под приглашением комментария к адресу: пропустить (комментарий не обязателен) / отмена. */
+/** Under the address comment prompt: skip (comment is optional) / cancel. */
 const commentKeyboard = new InlineKeyboard()
-  .text('⏭ Пропустить', CB_SKIP)
-  .text('❌ Отмена', CB_CANCEL);
+  .text('⏭ Пропустити', CB_SKIP)
+  .text('❌ Скасувати', CB_CANCEL);
 
-/** Подтверждение заказа: подтвердить / изменить (= назад) / отмена (SPEC §6). */
+/** Order confirmation: confirm / edit (= back) / cancel (SPEC §6). */
 const confirmKeyboard = new InlineKeyboard()
-  .text('✅ Всё верно, заказываю', CB_CONFIRM_YES)
+  .text('✅ Усе вірно, замовляю', CB_CONFIRM_YES)
   .row()
-  .text('✏️ Изменить', CB_BACK)
-  .text('❌ Отмена', CB_CANCEL);
+  .text('✏️ Змінити', CB_BACK)
+  .text('❌ Скасувати', CB_CANCEL);
 
-/** Онбординг новичка: «что у вас уже есть» (STEP3 T3). */
+/** New-client onboarding: "what do you already have" (STEP3 T3). */
 const onboardingKeyboard = new InlineKeyboard()
-  .text('🆕 Стартовый комплект', 'ob:kit')
+  .text('🆕 Стартовий комплект', 'ob:kit')
   .row()
-  .text('💧 Свои баки', 'ob:own')
+  .text('💧 Свої баки', 'ob:own')
   .row()
-  .text('🔁 Я уже ваш клиент', 'ob:existing')
+  .text('🔁 Я вже ваш клієнт', 'ob:existing')
   .row()
-  .text('⚙️ Другое', 'ob:other')
+  .text('⚙️ Інше', 'ob:other')
   .row()
-  .text('❌ Отмена', CB_CANCEL);
+  .text('❌ Скасувати', CB_CANCEL);
 
-/** Под вводом числа своих баков (OWN_TARA) — только отмена. */
-const ownTaraKeyboard = new InlineKeyboard().text('❌ Отмена', CB_CANCEL);
+/** Under the own-bottles count input (OWN_TARA) — only cancel. */
+const ownTaraKeyboard = new InlineKeyboard().text('❌ Скасувати', CB_CANCEL);
 
-/** Выбор помпы в стартовом комплекте: обычная / электро (T5). */
+/** Pump choice in the starter kit: standard / electric (T5). */
 const pumpChoiceKeyboard = new InlineKeyboard()
-  .text('Обычная', 'pump:std')
-  .text('Электро', 'pump:electro')
+  .text('Звичайна', 'pump:std')
+  .text('Електро', 'pump:electro')
   .row()
-  .text('❌ Отмена', CB_CANCEL);
+  .text('❌ Скасувати', CB_CANCEL);
 
-/** Своя тара: есть ли помпа (T5). */
+/** Own bottles: do you have a pump (T5). */
 const ownPumpKeyboard = new InlineKeyboard()
-  .text('Помпа есть', 'yn:yes')
-  .text('Нужна помпа', 'yn:no')
+  .text('Помпа є', 'yn:yes')
+  .text('Потрібна помпа', 'yn:no')
   .row()
-  .text('❌ Отмена', CB_CANCEL);
+  .text('❌ Скасувати', CB_CANCEL);
 
 /**
- * Клиентский бот (SPEC §6): grammY-инстанс на CLIENT_BOT_TOKEN, long polling.
- * FSM реализован поверх in-memory сессии grammY — при перезапуске диалог
- * начинается заново, это приемлемо для MVP (SPEC §9). Доступ к данным — только
- * через сервисы модулей, напрямую в БД бот не ходит (CLAUDE.md §6).
+ * Client bot (SPEC §6): a grammY instance on CLIENT_BOT_TOKEN, long polling.
+ * The FSM is implemented on top of grammY's in-memory session — on restart the
+ * dialog starts over, which is acceptable for the MVP (SPEC §9). Data access is
+ * only through module services; the bot never hits the DB directly (CLAUDE.md §6).
  *
- * Навигация: постоянное reply-меню = глобальные переходы (отменяют активный
- * заказ), inline-кнопки «Назад»/«Отмена» = переходы внутри сценария заказа.
+ * Navigation: the persistent reply menu = global transitions (they cancel the
+ * active order), inline "Back"/"Cancel" buttons = transitions inside the order scenario.
  */
 @Injectable()
 export class ClientBotService implements OnModuleInit, OnModuleDestroy {
@@ -216,7 +218,7 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
   onModuleInit(): void {
     const token = this.config.get<string>('CLIENT_BOT_TOKEN');
     if (!token) {
-      this.logger.warn('CLIENT_BOT_TOKEN не задан — клиентский бот не запущен');
+      this.logger.warn('CLIENT_BOT_TOKEN is not set — client bot not started');
       return;
     }
 
@@ -230,7 +232,7 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
     bot.catch((err) => this.logger.error(`client-bot error: ${err.message}`));
     this.bot = bot;
 
-    // start() резолвится только при остановке бота — НЕ await, иначе init зависнет.
+    // start() resolves only when the bot stops — do NOT await, or init would hang.
     void bot.start({
       onStart: (me) =>
         this.logger.log(`client-bot @${me.username} started (long polling)`),
@@ -242,25 +244,25 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * Уведомляет клиента о смене статуса его заказа диспетчером (SPEC §8).
-   * Слушает событие из OrdersService. Сбой отправки (клиент заблокировал бота,
-   * удалил чат) логируем, но не пробрасываем — это не должно ронять переход
-   * статуса у диспетчера (CLAUDE.md прав. 9).
+   * Notifies the client about a status change of their order by the dispatcher
+   * (SPEC §8). Listens to the OrdersService event. A send failure (client blocked
+   * the bot, deleted the chat) is logged but not rethrown — it must not break the
+   * dispatcher's status transition (CLAUDE.md rule 9).
    */
   @OnEvent(ORDER_STATUS_CHANGED)
   async onOrderStatusChanged(event: OrderStatusChangedEvent): Promise<void> {
     if (!this.bot) return;
     const text = texts.orderStatusUpdate(event.order);
     if (!text) return;
-    // Слушатель работает fire-and-forget (emit не ждёт): любую ошибку (БД,
-    // заблокированный бот) гасим здесь, иначе будет unhandled rejection.
+    // The listener is fire-and-forget (emit does not wait): swallow any error
+    // (DB, blocked bot) here, otherwise it becomes an unhandled rejection.
     try {
       const client = await this.clients.getById(event.order.clientId);
       if (!client) return;
       await this.bot.api.sendMessage(String(client.telegramId), text);
     } catch (err) {
       this.logger.warn(
-        `не удалось уведомить клиента по заказу ${event.order.id}: ${(err as Error).message}`,
+        `failed to notify client about order ${event.order.id}: ${(err as Error).message}`,
       );
     }
   }
@@ -279,14 +281,14 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
     bot.callbackQuery(CB_CANCEL, (ctx) => this.onCancel(ctx));
     bot.callbackQuery(CB_SKIP, (ctx) => this.onSkipComment(ctx));
     bot.callbackQuery(/^ocancel:(.+)$/, (ctx) => this.onCancelOwnOrder(ctx));
-    // message:text регистрируется ПОСЛЕ command('start'), чтобы /start не попадал сюда.
+    // message:text is registered AFTER command('start') so /start does not fall here.
     bot.on('message:text', (ctx) => this.onText(ctx));
-    // Фоллбэк для НЕ-текстовых сообщений (фото/гео/стикер): ловится последним,
-    // т.к. text/contact-хендлеры выше обрывают цепочку для своих типов.
+    // Fallback for NON-text messages (photo/geo/sticker): caught last, since the
+    // text/contact handlers above break the chain for their own types.
     bot.on('message', (ctx) => this.onNonTextMessage(ctx));
   }
 
-  /** /start: известного клиента ведём в меню, нового — на запрос контакта. */
+  /** /start: take a known client to the menu, a new one to the contact request. */
   private async onStart(ctx: BotContext): Promise<void> {
     if (!ctx.from) return;
     const client = await this.clients.findByTelegramId(BigInt(ctx.from.id));
@@ -298,12 +300,12 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
     await this.showMainMenu(ctx, client.name);
   }
 
-  /** Получен контакт: регистрируем клиента и показываем меню (AWAIT_CONTACT). */
+  /** Contact received: register the client and show the menu (AWAIT_CONTACT). */
   private async onContact(ctx: BotContext): Promise<void> {
     if (!ctx.from) return;
     const contact = ctx.message?.contact;
     if (!contact) return;
-    // Принимаем только собственный контакт пользователя (SPEC §9).
+    // Accept only the user's own contact (SPEC §9).
     if (contact.user_id !== ctx.from.id) {
       await this.replyMenu(ctx, texts.foreignContact, contactKeyboard);
       return;
@@ -320,7 +322,7 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
       client = await this.registerClient(BigInt(ctx.from.id), phone, name);
     }
 
-    // Новичок (нет заказов и состояния) → сразу онбординг, а не меню (STEP3 T3).
+    // New client (no orders and no state) → straight to onboarding, not the menu (STEP3 T3).
     if (await this.needsOnboarding(client)) {
       await this.renderOnboarding(ctx);
       return;
@@ -329,8 +331,8 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * Нужен ли клиенту онбординг: ещё не настроен (нет своей тары и помпы) и нет
-   * ни одного не-отменённого заказа. По нему решаем показ экрана «что у вас есть».
+   * Whether the client needs onboarding: not yet set up (no own bottles, no pump)
+   * and no non-cancelled orders. This decides whether to show the "what do you have" screen.
    */
   private async needsOnboarding(client: Client): Promise<boolean> {
     if (client.bottlesOnHand > 0 || client.hasPump) return false;
@@ -338,10 +340,9 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * Единая точка обработки текста: сначала reply-кнопки меню (глобальная
-   * навигация, SPEC §6), затем — ввод адреса (AwaitAddress) или комментария
-   * (AwaitComment). Совпадение с кнопкой имеет приоритет, поэтому «💰 Цены» не
-   * сохранится как адрес/комментарий.
+   * Single text entry point: first the reply menu buttons (global navigation,
+   * SPEC §6), then — address input (AwaitAddress) or comment input (AwaitComment).
+   * A button match takes priority, so "💰 Ціни" is not stored as an address/comment.
    */
   private async onText(ctx: BotContext): Promise<void> {
     const text = ctx.message?.text?.trim();
@@ -374,9 +375,9 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * Не-текстовое сообщение (фото, гео, голос, стикер). Если ждём адрес или
-   * комментарий — мягко просим прислать текстом (активный экран с «Отмена» не
-   * трогаем, чтобы из него можно было выйти). В остальных состояниях — игнор.
+   * Non-text message (photo, geo, voice, sticker). If we are waiting for the
+   * address or comment — gently ask to send text (we leave the active screen with
+   * its "Cancel" alone so it can be exited). In other states — ignore.
    */
   private async onNonTextMessage(ctx: BotContext): Promise<void> {
     const step = ctx.session.step;
@@ -389,7 +390,7 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  /** Введён адрес (AWAIT_ADDRESS): запоминаем raw и идём собирать комментарий. */
+  /** Address entered (AWAIT_ADDRESS): remember raw and go collect the comment. */
   private async onAddressInput(ctx: BotContext, raw: string): Promise<void> {
     const client = await this.requireClient(ctx);
     if (!client) return;
@@ -398,7 +399,7 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
     await this.renderCommentPrompt(ctx);
   }
 
-  /** «Пропустить» комментарий (AWAIT_COMMENT): создаём адрес без комментария. */
+  /** "Skip" the comment (AWAIT_COMMENT): create the address without a comment. */
   private async onSkipComment(ctx: BotContext): Promise<void> {
     await ctx.answerCallbackQuery();
     if (ctx.session.step !== Step.AwaitComment) return;
@@ -406,9 +407,9 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * Завершает сбор адреса: создаёт default-адрес с (опц.) комментарием и ведёт
-   * к выбору количества. addressRaw остаётся в сессии до выхода из сценария
-   * (resetSession), чтобы «Назад» на шаг комментария снова имел адрес.
+   * Finishes collecting the address: creates the default address with an optional
+   * comment and leads to quantity selection. addressRaw stays in the session until
+   * the scenario exits (resetSession), so "Back" to the comment step still has the address.
    */
   private async finalizeAddress(
     ctx: BotContext,
@@ -419,8 +420,8 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
     const raw = ctx.session.addressRaw;
     const intent = resolveFinalizeAddress(raw);
     if (intent.kind === 'choose-qty') {
-      // upsert, а не create: повторный проход шага («Назад») не плодит дубли.
-      // raw заведомо задан (choose-qty ⇒ !!raw) — guard для нарроуинга.
+      // upsert, not create: re-running the step ("Back") does not produce dupes.
+      // raw is definitely set (choose-qty ⇒ !!raw) — guard for narrowing.
       if (raw)
         await this.clients.setDefaultAddress(client.id, { raw, comment });
       this.pushHistory(ctx, Step.AwaitComment);
@@ -429,10 +430,10 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * «Заказать воду»: глобальный вход в сценарий. Сбрасывает прошлый флоу, затем по
-   * {@link resolveStartOrder}: нет адреса → собираем (первый заказ); есть адрес и
-   * прошлый заказ → сразу подтверждение с прошлым количеством (повтор в один тап);
-   * есть адрес, но заказов не было → выбор количества.
+   * "Order water": the global entry into the scenario. Resets the previous flow,
+   * then per {@link resolveStartOrder}: no address → collect it (first order); has
+   * address and a previous order → straight to confirmation with the previous
+   * quantity (one-tap repeat); has address but no orders → quantity selection.
    */
   private async startOrder(ctx: BotContext): Promise<void> {
     const client = await this.requireClient(ctx);
@@ -453,8 +454,8 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
       needsOnboarding,
     );
     if (intent.kind === 'confirm') {
-      // Подставляем прошлое количество и подталкиваем историю шагом выбора
-      // количества, чтобы «✏️ Изменить» (= «Назад») вёл к нему, а не в меню.
+      // Substitute the previous quantity and push the quantity-selection step into
+      // history so "✏️ Edit" (= "Back") leads to it rather than to the menu.
       ctx.session.bottles = intent.bottles;
       this.pushHistory(ctx, Step.ChooseQty);
     }
@@ -462,10 +463,10 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * Выбор на экране онбординга (STEP3 T3). kit → обычный первый-заказ флоу;
-   * own → ввод числа своих баков; existing/other → пока к диспетчеру (T4).
-   * kind заказа выводится из состояния клиента (своя тара → OWN_TARA), поэтому
-   * в сессию его не тащим.
+   * Choice on the onboarding screen (STEP3 T3). kit → the regular first-order flow;
+   * own → own-bottles count input; existing/other → to the dispatcher for now (T4).
+   * The order kind is derived from the client's state (own bottles → OWN_TARA), so
+   * it is not carried in the session.
    */
   private async onOnboardingChoice(ctx: BotContext): Promise<void> {
     await ctx.answerCallbackQuery();
@@ -486,14 +487,14 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
         await this.renderOwnTaraCount(ctx);
         return;
       case 'existing':
-        // Заявлен действующим: тот же ввод баков, но с пометкой на сверку диспетчеру.
+        // Claimed as existing: same bottle-count input, but flagged for dispatcher review.
         ctx.session.existingClient = true;
         await this.renderOwnTaraCount(ctx);
         return;
       case 'other': {
-        // Нестандарт — оформит диспетчер (звонком). Заглушка с возвратом в меню.
+        // Non-standard — handled by the dispatcher (by call). Stub returning to the menu.
         const phone =
-          this.config.get<string>('SUPPORT_PHONE') ?? '(телефон уточняется)';
+          this.config.get<string>('SUPPORT_PHONE') ?? '(телефон уточнюється)';
         this.resetSession(ctx, Step.MainMenu);
         await this.replyMenu(ctx, texts.onboardingToDispatcher(phone));
         return;
@@ -502,9 +503,9 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * Ввод числа своих баков (OWN_TARA, шаг OwnTaraCount). Объявленная клиентом
-   * тара становится стартовым балансом (помпа есть — своя); дальше обычный сбор
-   * адреса. Тип заказа OWN_TARA выведется из bottlesOnHand>0 при расчёте.
+   * Own-bottles count input (OWN_TARA, step OwnTaraCount). The bottles declared by
+   * the client become the starting balance (the pump is their own); then the usual
+   * address collection. The OWN_TARA order kind is derived from bottlesOnHand>0 at calc time.
    */
   private async onOwnTaraCountInput(
     ctx: BotContext,
@@ -520,18 +521,18 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
     await this.clients.setTaraState(client.id, {
       bottlesOnHand: count,
       hasPump: true,
-      // «Я уже ваш клиент» → флаг на сверку диспетчером (снимется при приёме заказа).
+      // "I am already your client" → flag for dispatcher review (cleared on order accept).
       pendingReview: ctx.session.existingClient === true,
     });
     if (ctx.session.existingClient === true) {
-      // Действующий клиент — помпа у него наша, вопрос не задаём.
+      // Existing client — the pump is ours, no need to ask.
       await this.renderAddressPrompt(ctx);
     } else {
       await this.renderOwnPumpAsk(ctx);
     }
   }
 
-  /** Выбор помпы в стартовом комплекте (T5): обычная / электро. */
+  /** Pump choice in the starter kit (T5): standard / electric. */
   private async onPumpChoice(ctx: BotContext): Promise<void> {
     await ctx.answerCallbackQuery();
     if (ctx.session.step !== Step.PumpChoice) return;
@@ -541,7 +542,7 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
     await this.renderAddressPrompt(ctx);
   }
 
-  /** Своя тара: есть ли помпа (T5). «Нет» → докупка помпы к заказу. */
+  /** Own bottles: do you have a pump (T5). "No" → add the pump to the order. */
   private async onOwnPumpAnswer(ctx: BotContext): Promise<void> {
     await ctx.answerCallbackQuery();
     if (ctx.session.step !== Step.OwnPumpAsk) return;
@@ -552,9 +553,9 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * «Мои заказы»: последние заказы клиента (SPEC §6). Прерывает активный заказ.
-   * Под заказами в статусе CREATED — кнопки отмены (SPEC §9); если их нет,
-   * список идёт обычным текстом с reply-меню.
+   * "My orders": the client's latest orders (SPEC §6). Interrupts the active order.
+   * Under orders in CREATED status — cancel buttons (SPEC §9); if there are none,
+   * the list goes as plain text with the reply menu.
    */
   private async showHistory(ctx: BotContext): Promise<void> {
     const client = await this.requireClient(ctx);
@@ -569,8 +570,8 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * Отмена своего заказа из списка (SPEC §9). Владелец и статус проверяются в
-   * сервисе; здесь — тост о результате и перерисовка списка на месте.
+   * Cancel one's own order from the list (SPEC §9). Owner and status are checked
+   * in the service; here — a toast about the result and a redraw of the list in place.
    */
   private async onCancelOwnOrder(ctx: BotContext): Promise<void> {
     const orderId = ctx.match?.[1];
@@ -582,13 +583,15 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
     try {
       await this.orders.cancelOwnOrder(orderId, client.id);
     } catch {
-      // Уже принят/доставлен/чужой — отменить нельзя.
-      await ctx.answerCallbackQuery({ text: 'Этот заказ уже нельзя отменить' });
+      // Already accepted/delivered/foreign — cannot be cancelled.
+      await ctx.answerCallbackQuery({
+        text: 'Це замовлення вже не можна скасувати',
+      });
       return;
     }
-    await ctx.answerCallbackQuery({ text: 'Заказ отменён' });
+    await ctx.answerCallbackQuery({ text: 'Замовлення скасовано' });
 
-    // Перерисовываем список на месте под актуальные статусы и кнопки.
+    // Redraw the list in place to reflect the current statuses and buttons.
     const orders = await this.orders.listByClient(client.id);
     const text = orders.length ? texts.history(orders) : texts.historyEmpty;
     const kb = buildHistoryKeyboard(orders);
@@ -596,11 +599,11 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
       await ctx.editMessageText(text, kb ? { reply_markup: kb } : undefined);
       if (!kb) ctx.session.activeInlineMessageId = undefined;
     } catch {
-      // Сообщение слишком старое для правки — клиент уже увидел тост «отменён».
+      // Message too old to edit — the client already saw the "cancelled" toast.
     }
   }
 
-  /** «Цены»: текущая сетка из PriceSettings (SPEC §6). Прерывает активный заказ. */
+  /** "Prices": the current grid from PriceSettings (SPEC §6). Interrupts the active order. */
   private async showPrices(ctx: BotContext): Promise<void> {
     const client = await this.requireClient(ctx);
     if (!client) return;
@@ -610,22 +613,22 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
     await this.replyMenu(ctx, texts.prices(prices));
   }
 
-  /** «Связаться»: телефон поддержки из конфига (SPEC §6, §11). */
+  /** "Contact us": support phone from config (SPEC §6, §11). */
   private async showContacts(ctx: BotContext): Promise<void> {
     const client = await this.requireClient(ctx);
     if (!client) return;
     this.leaveOrderFlow(ctx);
 
     const phone =
-      this.config.get<string>('SUPPORT_PHONE') ?? '(телефон уточняется)';
+      this.config.get<string>('SUPPORT_PHONE') ?? '(телефон уточнюється)';
     await this.replyMenu(ctx, texts.contacts(phone));
   }
 
-  /** Выбрано количество: считаем превью суммы и показываем подтверждение. */
+  /** Quantity chosen: compute the price preview and show the confirmation. */
   private async onChooseQty(ctx: BotContext): Promise<void> {
     await ctx.answerCallbackQuery();
     if (ctx.session.step !== Step.ChooseQty) return;
-    // Валидация недоверенного callback'а (SPEC §7) — в чистой parseQty.
+    // Validation of the untrusted callback (SPEC §7) — in the pure parseQty.
     const bottles = parseQty(ctx.match?.[1] ?? '');
     if (bottles === null) return;
 
@@ -640,10 +643,10 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
     await this.renderScreen(ctx, intent, { client, address });
   }
 
-  /** Подтверждение заказа. Шаг уводится из Confirm сразу — защита от двойного тапа. */
+  /** Order confirmation. The step leaves Confirm immediately — guard against a double tap. */
   private async onConfirmYes(ctx: BotContext): Promise<void> {
     await ctx.answerCallbackQuery();
-    if (ctx.session.step !== Step.Confirm) return; // идемпотентность (SPEC §9)
+    if (ctx.session.step !== Step.Confirm) return; // idempotency (SPEC §9)
     const bottles = ctx.session.bottles;
 
     const client = await this.requireClient(ctx);
@@ -652,19 +655,19 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
       await this.showMainMenu(ctx, client.name);
       return;
     }
-    // Опции помпы — до resetSession (он их обнуляет).
+    // Pump options — before resetSession (it clears them).
     const pumpOpts = {
       electro: ctx.session.electro,
       pumpAddon: ctx.session.pumpAddon,
     };
-    // Уводим из Confirm ДО создания заказа — повторный тап не создаст дубль.
+    // Leave Confirm BEFORE creating the order — a repeat tap won't create a dupe.
     this.resetSession(ctx, Step.MainMenu);
 
     try {
       await this.orders.createOrder(client.id, bottles, pumpOpts);
     } catch (err) {
-      // Сбой создания (БД/гонка) — не молчим: клиент должен понять, что заказ
-      // не оформлен, и повторить (выбор кол-ва уже сброшен — оформит заново).
+      // Creation failure (DB/race) — don't stay silent: the client must understand
+      // the order was not placed and retry (quantity already reset — they re-order).
       this.logger.error(
         `createOrder failed for client ${client.id}: ${(err as Error).message}`,
       );
@@ -674,20 +677,20 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
     await this.renderScreen(ctx, { kind: 'order-done' }, { client });
   }
 
-  /** «Назад» (в т.ч. «Изменить» на Confirm): шаг назад по стеку истории. */
+  /** "Back" (incl. "Edit" on Confirm): one step back along the history stack. */
   private async onBack(ctx: BotContext): Promise<void> {
     await ctx.answerCallbackQuery();
     const client = await this.requireClient(ctx);
     if (!client) return;
 
     const prev = ctx.session.history.pop();
-    // Адрес важен только для ветки выбора количества — грузим его лишь там.
+    // The address only matters for the quantity branch — load it only there.
     const hasDefaultAddress =
       prev === Step.ChooseQty
         ? (await this.clients.getDefaultAddress(client.id)) !== null
         : false;
-    // resolveBack решает «куда», renderScreen — «как». BackTarget — подмножество
-    // ScreenIntent['kind']; адаптируем к интенту (main-menu несёт имя клиента).
+    // resolveBack decides "where", renderScreen — "how". BackTarget is a subset of
+    // ScreenIntent['kind']; adapt it to the intent (main-menu carries the client name).
     const target = resolveBack(prev, hasDefaultAddress);
     const intent: ScreenIntent =
       target === 'main-menu'
@@ -700,7 +703,7 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
     await this.renderScreen(ctx, intent, { client });
   }
 
-  /** «Отмена»: выход из сценария заказа в главное меню. */
+  /** "Cancel": exit the order scenario back to the main menu. */
   private async onCancel(ctx: BotContext): Promise<void> {
     await ctx.answerCallbackQuery();
     const client = await this.requireClient(ctx);
@@ -709,17 +712,17 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
     await this.replyMenu(ctx, texts.orderCancelled);
   }
 
-  // --- Render-хелперы экранов: ставят шаг и отрисовывают (SPEC §6) -----------
+  // --- Screen render helpers: set the step and draw (SPEC §6) -----------------
 
   /**
-   * Единственная точка, где ScreenIntent превращается в реальный экран (SPEC §6).
-   * Исчерпывающий switch с `default: assertNever(intent)`: забытый при добавлении
-   * нового экран ловится компилятором, а не в рантайме. Данные, требующие
-   * async-загрузки (client, address), приходят готовыми в `deps` из хендлера —
-   * здесь только рендер, без походов в сервисы.
+   * The only place where a ScreenIntent becomes a real screen (SPEC §6).
+   * An exhaustive switch with `default: assertNever(intent)`: a screen forgotten
+   * when adding a new one is caught by the compiler, not at runtime. Data requiring
+   * an async load (client, address) arrives ready in `deps` from the handler —
+   * here is only rendering, no service calls.
    *
-   * `await-contact` также рендерится напрямую в onStart/requireClient (там клиента
-   * ещё нет) — случай оставлен здесь для полноты словаря и будущего роутинга.
+   * `await-contact` is also rendered directly in onStart/requireClient (where there
+   * is no client yet) — the case is kept here for dictionary completeness and future routing.
    */
   private async renderScreen(
     ctx: BotContext,
@@ -756,8 +759,8 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
         await this.renderChooseQty(ctx, deps.client.id);
         return;
       case 'confirm':
-        // confirm возвращается только при наличии адреса (resolveAfterQty) —
-        // guard для нарроуинга Address | null → Address.
+        // confirm is returned only when an address exists (resolveAfterQty) —
+        // guard for narrowing Address | null → Address.
         if (deps.address) {
           await this.renderConfirm(ctx, deps.client.id, deps.address);
         }
@@ -845,11 +848,11 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
     await this.replyInline(ctx, texts.confirm(quote, address), confirmKeyboard);
   }
 
-  // --- Отправка экранов с очисткой висящих inline-кнопок --------------------
+  // --- Sending screens with cleanup of hanging inline buttons ----------------
 
   /**
-   * Inline-экран сценария: гасит клавиатуру прошлого экрана и запоминает
-   * message_id нового, чтобы при следующем переходе снять кнопки и с него.
+   * Inline scenario screen: strips the previous screen's keyboard and remembers
+   * the new message_id, so the next transition can strip its buttons too.
    */
   private async replyInline(
     ctx: BotContext,
@@ -862,8 +865,8 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * Экран с reply-меню (или запросом контакта): гасит висящую inline-клавиатуру
-   * сценария. Свой message_id не запоминаем — у reply-клавиатуры её нет.
+   * Screen with a reply menu (or a contact request): strips the scenario's hanging
+   * inline keyboard. We do not remember its own message_id — a reply keyboard has none.
    */
   private async replyMenu(
     ctx: BotContext,
@@ -875,8 +878,8 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * Снимает inline-клавиатуру с последнего экрана сценария (если он был).
-   * Ошибку (сообщение удалено/слишком старое) глотаем — это не критично.
+   * Strips the inline keyboard from the last scenario screen (if any).
+   * Swallows the error (message deleted/too old) — it is not critical.
    */
   private async clearActiveInline(ctx: BotContext): Promise<void> {
     const id = ctx.session.activeInlineMessageId;
@@ -885,16 +888,16 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
     try {
       await ctx.api.editMessageReplyMarkup(ctx.chat.id, id);
     } catch {
-      // сообщение уже удалено/недоступно — игнорируем
+      // message already deleted/unavailable — ignore
     }
   }
 
-  // --- Управление сессией ---------------------------------------------------
+  // --- Session management ----------------------------------------------------
 
   /**
-   * Сбрасывает локальное состояние сценария и ставит указанный шаг.
-   * `activeInlineMessageId` НЕ трогаем — им управляют replyInline/replyMenu,
-   * иначе мы потеряли бы id до того, как сняли с сообщения клавиатуру.
+   * Resets the local scenario state and sets the given step.
+   * We do NOT touch `activeInlineMessageId` — it is managed by replyInline/replyMenu,
+   * otherwise we would lose the id before stripping the keyboard from the message.
    */
   private resetSession(ctx: BotContext, step: Step): void {
     ctx.session.step = step;
@@ -907,8 +910,8 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * Уход из активного сценария заказа по reply-кнопке (SPEC §6): если шёл заказ,
-   * считаем его отменённым (Order ещё не создан — сбрасываем только сессию).
+   * Leaving the active order scenario via a reply button (SPEC §6): if an order was
+   * in progress, treat it as cancelled (the Order is not created yet — reset the session only).
    */
   private leaveOrderFlow(ctx: BotContext): void {
     if (ORDER_FLOW_STEPS.includes(ctx.session.step)) {
@@ -921,8 +924,8 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * Достаёт клиента по telegramId; если бот его не знает (потеря сессии,
-   * прямой тап по старой кнопке) — возвращает к запросу контакта.
+   * Fetches the client by telegramId; if the bot does not know them (lost session,
+   * a direct tap on an old button) — returns them to the contact request.
    */
   private async requireClient(ctx: BotContext) {
     if (!ctx.from) return null;
@@ -935,7 +938,7 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
     return client;
   }
 
-  /** Регистрация клиента; если телефон уже знаком — переиспользуем (edge §9). */
+  /** Registers a client; if the phone is already known — reuse it (edge §9). */
   private async registerClient(
     telegramId: bigint,
     phone: string,

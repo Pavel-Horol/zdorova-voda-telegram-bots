@@ -5,9 +5,9 @@ import { PricingSettingsModule } from '../../modules/pricing-settings/pricing-se
 import { ClientBotService } from './client-bot.service';
 
 /**
- * Клиентский бот (SPEC §6). Данные берёт через сервисы модулей
- * clients/orders/pricing-settings — прямого доступа к Prisma у бота нет
- * (CLAUDE.md §6). pricing-settings нужен для экрана «Цены».
+ * Client bot (SPEC §6). Takes data via the clients/orders/pricing-settings module
+ * services — the bot has no direct Prisma access (CLAUDE.md §6). pricing-settings is
+ * needed for the "Prices" screen.
  */
 @Module({
   imports: [ClientsModule, OrdersModule, PricingSettingsModule],

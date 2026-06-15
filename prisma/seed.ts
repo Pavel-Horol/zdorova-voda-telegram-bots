@@ -5,12 +5,12 @@ const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL });
 const prisma = new PrismaClient({ adapter });
 
 /**
- * Идемпотентный сид: гарантирует наличие строки-синглтона PriceSettings (id=1)
- * с дефолтными ценами (SPEC §3). Без неё первый же расчёт суммы упадёт —
- * цены берутся из БД, а не из кода.
+ * Idempotent seed: ensures the PriceSettings singleton row (id=1) exists with
+ * default prices (SPEC §3). Without it the very first total calculation would fail —
+ * prices come from the DB, not from code.
  *
- * upsert ничего не перезаписывает на повторном запуске: если строка уже есть,
- * актуальные (возможно отредактированные диспетчером) цены остаются как есть.
+ * upsert overwrites nothing on a repeat run: if the row already exists, the current
+ * (possibly dispatcher-edited) prices stay as they are.
  */
 async function main(): Promise<void> {
   const settings = await prisma.priceSettings.upsert({

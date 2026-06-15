@@ -45,10 +45,10 @@ import {
   routeDispatcherText,
 } from './dispatcher-bot.fsm';
 
-/** Потолок количества при правке заказа — защита от опечатки (диспетчер доверенный). */
+/** Quantity cap when editing an order — guard against a typo (dispatcher is trusted). */
 const MAX_EDIT_QTY = 100;
 
-/** Постоянное reply-меню диспетчера — всегда внизу экрана (по образцу клиента). */
+/** Persistent dispatcher reply menu — always at the bottom (mirrors the client's). */
 const dispatcherMenuKeyboard = new Keyboard()
   .text(BTN_ORDERS)
   .row()
@@ -58,9 +58,9 @@ const dispatcherMenuKeyboard = new Keyboard()
   .persistent();
 
 /**
- * Диспетчерский бот (SPEC §7): команды /prices, /stats и обработка кнопок под
- * заказами. Использует общий инстанс DISPATCHER_BOT (тот же, что шлёт уведомления
- * из TelegramOrderDispatcher). В БД ходит только через сервисы модулей (§6).
+ * Dispatcher bot (SPEC §7): /prices, /stats commands and handling of the buttons
+ * under orders. Uses the shared DISPATCHER_BOT instance (the same one that sends
+ * notifications from TelegramOrderDispatcher). Hits the DB only via module services (§6).
  */
 @Injectable()
 export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
@@ -76,7 +76,7 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
   onModuleInit(): void {
     if (!this.bot) {
       this.logger.warn(
-        'DISPATCHER_BOT_TOKEN не задан — диспетчерский бот не запущен',
+        'DISPATCHER_BOT_TOKEN is not set — dispatcher bot not started',
       );
       return;
     }
@@ -89,14 +89,14 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
       this.logger.error(`dispatcher-bot error: ${err.message}`),
     );
 
-    // Меню команд Telegram («/») — независимый API-вызов, не блокируем запуск.
+    // Telegram command menu ("/") — an independent API call, don't block startup.
     void bot.api
       .setMyCommands(dispatcherCommands)
       .catch((err: Error) =>
         this.logger.warn(`setMyCommands failed: ${err.message}`),
       );
 
-    // start() резолвится только при остановке — НЕ await, иначе init зависнет.
+    // start() resolves only on stop — do NOT await, or init would hang.
     void bot.start({
       onStart: (me) =>
         this.logger.log(
@@ -109,7 +109,7 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
     await this.bot?.stop();
   }
 
-  /** Пропускаем апдейты только из чата диспетчера (если он задан). */
+  /** Let through updates only from the dispatcher chat (if it is set). */
   private useChatGuard(bot: DispatcherBot): void {
     const allowedChat = this.config.get<string>('DISPATCHER_CHAT_ID');
     if (!allowedChat) return;
@@ -134,11 +134,11 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
       /^pe:(price1|priceFrom2|priceFrom6|depositPerBottle|pumpPrice|electroPumpPrice|waterStartPrice)$/,
       (ctx) => this.onPickPriceField(ctx),
     );
-    // message:text — после команд, чтобы /prices и /stats не попадали сюда.
+    // message:text — after commands, so /prices and /stats do not fall here.
     bot.on('message:text', (ctx) => this.onText(ctx));
   }
 
-  /** Кнопка под заказом: меняем статус и перерисовываем сообщение. */
+  /** Button under an order: change the status and redraw the message. */
   private async onTransition(
     ctx: DispatcherContext,
     action: 'accept' | 'deliver' | 'cancel',
@@ -154,8 +154,10 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
       else if (action === 'deliver') await this.orders.markDelivered(id);
       else await this.orders.cancelOrder(id);
     } catch {
-      // Невалидный переход (двойной тап, чужой статус) — не падаем, сообщаем тостом.
-      await ctx.answerCallbackQuery({ text: 'Уже обработано или недоступно' });
+      // Invalid transition (double tap, wrong status) — don't crash, report via toast.
+      await ctx.answerCallbackQuery({
+        text: 'Вже оброблено або недоступно',
+      });
       return;
     }
 
@@ -163,7 +165,7 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
     await this.refreshOrderMessage(ctx, id);
   }
 
-  /** Перерисовывает сообщение заказа под актуальный статус и кнопки. */
+  /** Redraws the order message to reflect the current status and buttons. */
   private async refreshOrderMessage(
     ctx: DispatcherContext,
     id: string,
@@ -175,22 +177,22 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
     });
   }
 
-  /** /start — приветствие + постоянное reply-меню (точка входа диспетчера). */
+  /** /start — greeting + persistent reply menu (the dispatcher's entry point). */
   private async onStart(ctx: DispatcherContext): Promise<void> {
     await ctx.reply(dispatcherWelcome, {
       reply_markup: dispatcherMenuKeyboard,
     });
   }
 
-  /** /help — краткая справка по командам. */
+  /** /help — short command reference. */
   private async onHelp(ctx: DispatcherContext): Promise<void> {
     await ctx.reply(dispatcherHelp);
   }
 
   /**
-   * /orders (и кнопка «📋 Активные») — рабочая очередь: заказы в статусах
-   * created/accepted каждый отдельной карточкой с кнопками действий, чтобы их
-   * можно было обработать, даже если исходный пуш уехал вверх по чату.
+   * /orders (and the "📋 Активні" button) — the work queue: orders in statuses
+   * created/accepted, each as a separate card with action buttons, so they can be
+   * handled even if the original push scrolled up the chat.
    */
   private async onActiveOrders(ctx: DispatcherContext): Promise<void> {
     const orders = await this.orders.listActive();
@@ -206,51 +208,51 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  /** /prices — текущие цены + кнопки выбора поля для редактирования. */
+  /** /prices — current prices + buttons to pick a field for editing. */
   private async onPrices(ctx: DispatcherContext): Promise<void> {
-    // Сбрасываем незавершённое редактирование: повторный вход в /prices отменяет
-    // ожидание ввода (иначе следующее число ушло бы в прошлое поле/заказ).
+    // Reset any unfinished editing: re-entering /prices cancels the pending input
+    // (otherwise the next number would go into the previous field/order).
     ctx.session.editingPriceField = undefined;
     ctx.session.editingOrderId = undefined;
     const prices = await this.pricingSettings.getCurrent();
     await ctx.reply(pricesMessage(prices), { reply_markup: pricesKeyboard() });
   }
 
-  /** Выбор поля цены: запоминаем в сессии и ждём число следующим сообщением. */
+  /** Price field picked: remember it in the session and wait for a number next message. */
   private async onPickPriceField(ctx: DispatcherContext): Promise<void> {
     await ctx.answerCallbackQuery();
     const field = ctx.match?.[1] as EditablePriceField | undefined;
     if (!field) return;
-    ctx.session.editingOrderId = undefined; // режимы ввода взаимоисключающие
+    ctx.session.editingOrderId = undefined; // input modes are mutually exclusive
     ctx.session.editingPriceField = field;
     await ctx.reply(
-      `Введите новое значение для «${priceFieldLabel(field)}» (целое число грн):`,
+      `Введіть нове значення для «${priceFieldLabel(field)}» (ціле число грн):`,
       { reply_markup: priceEditCancelKeyboard() },
     );
   }
 
-  /** «❌ Отмена» под запросом цены: сбрасываем редактирование. */
+  /** "❌ Cancel" under the price prompt: reset editing. */
   private async onCancelPriceEdit(ctx: DispatcherContext): Promise<void> {
     await ctx.answerCallbackQuery();
-    if (!ctx.session.editingPriceField) return; // уже сохранено/неактуально
+    if (!ctx.session.editingPriceField) return; // already saved/irrelevant
     ctx.session.editingPriceField = undefined;
-    // editMessageText без reply_markup убирает и кнопку «Отмена».
-    await ctx.editMessageText('Изменение цены отменено.');
+    // editMessageText without reply_markup also removes the "Cancel" button.
+    await ctx.editMessageText('Зміну ціни скасовано.');
   }
 
-  /** «✏️ Изменить»: запоминаем заказ и ждём новое количество бутылей текстом. */
+  /** "✏️ Edit": remember the order and wait for the new bottle quantity as text. */
   private async onEditOrder(ctx: DispatcherContext): Promise<void> {
     await ctx.answerCallbackQuery();
     const id = ctx.match?.[1];
     if (!id) return;
-    ctx.session.editingPriceField = undefined; // режимы ввода взаимоисключающие
+    ctx.session.editingPriceField = undefined; // input modes are mutually exclusive
     ctx.session.editingOrderId = id;
     await ctx.reply(editQuantityPrompt(id));
   }
 
   /**
-   * Текст: сначала кнопки постоянного меню (приоритет, чтобы «💰 Цены» не ушло
-   * как значение цены), затем — ввод числа на шаге редактирования.
+   * Text: first the persistent menu buttons (priority, so "💰 Ціни" is not taken
+   * as a price value), then — number input on the editing step.
    */
   private async onText(ctx: DispatcherContext): Promise<void> {
     const text = ctx.message?.text?.trim();
@@ -264,14 +266,14 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
         else await this.onStats(ctx);
         return;
       case 'edit-quantity':
-        // Ввод нового количества для заказа (✏️ Изменить) — приоритет над ценой.
+        // New quantity input for an order (✏️ Edit) — priority over price.
         await this.applyEditedQuantity(ctx, intent.orderId, text);
         return;
       case 'edit-price': {
         const parsed = parsePriceValue(text);
         if (!parsed.ok) {
           await ctx.reply(
-            'Нужно целое неотрицательное число. Попробуйте ещё раз.',
+            'Потрібне ціле невід’ємне число. Спробуйте ще раз.',
           );
           return;
         }
@@ -280,7 +282,7 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
           parsed.value,
         );
         ctx.session.editingPriceField = undefined;
-        await ctx.reply(`Сохранено ✅\n\n${pricesMessage(updated)}`, {
+        await ctx.reply(`Збережено ✅\n\n${pricesMessage(updated)}`, {
           reply_markup: pricesKeyboard(),
         });
         return;
@@ -290,7 +292,7 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  /** Парсит количество и применяет правку заказа; на ошибке — ждём повторно. */
+  /** Parses the quantity and applies the order edit; on error — wait again. */
   private async applyEditedQuantity(
     ctx: DispatcherContext,
     orderId: string,
@@ -299,7 +301,7 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
     const parsed = parseEditedQuantity(text, MAX_EDIT_QTY);
     if (!parsed.ok) {
       await ctx.reply(
-        `Нужно целое число от 1 до ${MAX_EDIT_QTY}. Попробуйте ещё раз.`,
+        `Потрібне ціле число від 1 до ${MAX_EDIT_QTY}. Спробуйте ще раз.`,
       );
       return;
     }
@@ -307,19 +309,19 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
     try {
       view = await this.orders.editQuantity(orderId, parsed.value);
     } catch {
-      // Заказ уже доставлен/отменён/удалён — правка недоступна.
+      // Order already delivered/cancelled/deleted — editing unavailable.
       ctx.session.editingOrderId = undefined;
-      await ctx.reply('Этот заказ уже нельзя изменить.');
+      await ctx.reply('Це замовлення вже не можна змінити.');
       return;
     }
     ctx.session.editingOrderId = undefined;
     await ctx.reply(
-      `Изменено ✅\n\n${orderMessage(view, view.client, view.address)}`,
+      `Змінено ✅\n\n${orderMessage(view, view.client, view.address)}`,
       { reply_markup: orderKeyboard(view.id, view.status) },
     );
   }
 
-  /** /stats — сводка за сегодня и за неделю (SPEC §7). */
+  /** /stats — summary for today and this week (SPEC §7). */
   private async onStats(ctx: DispatcherContext): Promise<void> {
     const stats = await this.orders.stats();
     await ctx.reply(statsMessage(stats));

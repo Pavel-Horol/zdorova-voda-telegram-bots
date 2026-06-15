@@ -10,9 +10,9 @@ import {
 } from './dispatcher-bot.texts';
 
 /**
- * Telegram-реализация OrderDispatcher (SPEC §7): шлёт уведомление о новом заказе
- * в DISPATCHER_CHAT_ID с inline-кнопками статусов. Использует общий инстанс бота
- * (DISPATCHER_BOT) только на отправку; приём кнопок — в DispatcherBotService.
+ * Telegram implementation of OrderDispatcher (SPEC §7): sends a new-order
+ * notification to DISPATCHER_CHAT_ID with inline status buttons. Uses the shared
+ * bot instance (DISPATCHER_BOT) only for sending; button handling — in DispatcherBotService.
  */
 @Injectable()
 export class TelegramOrderDispatcher implements OrderDispatcher {
@@ -31,7 +31,7 @@ export class TelegramOrderDispatcher implements OrderDispatcher {
     const chatId = this.config.get<string>('DISPATCHER_CHAT_ID');
     if (!this.bot || !chatId) {
       this.logger.warn(
-        `DISPATCHER_BOT/CHAT_ID не настроены — заказ ${order.id} не отправлен диспетчеру`,
+        `DISPATCHER_BOT/CHAT_ID not configured — order ${order.id} not sent to the dispatcher`,
       );
       return;
     }
@@ -49,7 +49,7 @@ export class TelegramOrderDispatcher implements OrderDispatcher {
     const chatId = this.config.get<string>('DISPATCHER_CHAT_ID');
     if (!this.bot || !chatId) {
       this.logger.warn(
-        `DISPATCHER_BOT/CHAT_ID не настроены — отмена заказа ${order.id} не отправлена`,
+        `DISPATCHER_BOT/CHAT_ID not configured — cancellation of order ${order.id} not sent`,
       );
       return;
     }

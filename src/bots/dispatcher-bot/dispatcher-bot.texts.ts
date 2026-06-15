@@ -9,19 +9,19 @@ import type {
 import type { EditablePriceField } from '../../modules/pricing-settings/pricing-settings.service';
 
 const STATUS_HEADER: Record<OrderStatus, string> = {
-  [OrderStatus.CREATED]: '🔔 НОВЫЙ ЗАКАЗ',
-  [OrderStatus.ACCEPTED]: '✅ ПРИНЯТ',
-  [OrderStatus.DELIVERED]: '🚚 ДОСТАВЛЕН',
-  [OrderStatus.CANCELLED]: '❌ ОТМЕНЁН',
+  [OrderStatus.CREATED]: '🔔 НОВЕ ЗАМОВЛЕННЯ',
+  [OrderStatus.ACCEPTED]: '✅ ПРИЙНЯТО',
+  [OrderStatus.DELIVERED]: '🚚 ДОСТАВЛЕНО',
+  [OrderStatus.CANCELLED]: '❌ СКАСОВАНО',
 };
 
 const PRICE_FIELD_LABEL: Record<EditablePriceField, string> = {
-  price1: 'Вода: 1 бутыль',
-  priceFrom2: 'Вода: от 2',
-  priceFrom6: 'Вода: от 6',
-  depositPerBottle: 'Залог за бак',
+  price1: 'Вода: 1 бутель',
+  priceFrom2: 'Вода: від 2',
+  priceFrom6: 'Вода: від 6',
+  depositPerBottle: 'Застава за бак',
   pumpPrice: 'Помпа',
-  electroPumpPrice: 'Помпа электро',
+  electroPumpPrice: 'Помпа електро',
   waterStartPrice: 'Старт-вода',
 };
 
@@ -29,18 +29,18 @@ export function priceFieldLabel(field: EditablePriceField): string {
   return PRICE_FIELD_LABEL[field];
 }
 
-/** Приветствие диспетчера (/start) — над постоянным меню. */
+/** Dispatcher greeting (/start) — above the persistent menu. */
 export const dispatcherWelcome =
-  'Диспетчерский бот 🚰\n' +
-  'Новые заказы приходят сюда автоматически — обрабатывайте кнопками под ними.\n' +
-  'Меню ниже: активные заказы, цены и статистика.';
+  'Диспетчерський бот 🚰\n' +
+  'Нові замовлення надходять сюди автоматично — обробляйте кнопками під ними.\n' +
+  'Меню нижче: активні замовлення, ціни та статистика.';
 
-/** Заголовок списка активных заказов (/orders). */
+/** Header of the active orders list (/orders). */
 export function activeOrdersHeader(count: number): string {
-  return `📋 Активные заказы: ${count}`;
+  return `📋 Активні замовлення: ${count}`;
 }
 
-/** Дата-время заказа в карточке: киевское время, формат «ДД.ММ, ЧЧ:ММ». */
+/** Order date-time in the card: Kyiv time, format "DD.MM, HH:MM". */
 function formatDateTime(d: Date): string {
   return new Intl.DateTimeFormat('uk-UA', {
     timeZone: 'Europe/Kyiv',
@@ -51,57 +51,57 @@ function formatDateTime(d: Date): string {
   }).format(d);
 }
 
-/** Сводка /stats (SPEC §7): сегодня + за неделю, без отменённых. */
+/** /stats summary (SPEC §7): today + this week, without cancelled. */
 export function statsMessage(stats: {
   today: { count: number; sum: number };
   week: { count: number; sum: number };
 }): string {
   return (
-    '📊 Статистика (без отменённых):\n' +
-    `Сегодня: ${stats.today.count} заказ(ов), сумма ${stats.today.sum} грн\n` +
-    `За неделю: ${stats.week.count} заказ(ов), сумма ${stats.week.sum} грн`
+    '📊 Статистика (без скасованих):\n' +
+    `Сьогодні: ${stats.today.count} замовлень, сума ${stats.today.sum} грн\n` +
+    `За тиждень: ${stats.week.count} замовлень, сума ${stats.week.sum} грн`
   );
 }
 
-/** Активных заказов нет (/orders). */
-export const noActiveOrders = 'Активных заказов нет 👍';
+/** No active orders (/orders). */
+export const noActiveOrders = 'Активних замовлень немає 👍';
 
-/** Запрос нового количества бутылей при правке заказа (✏️ Изменить). */
+/** Prompt for the new bottle quantity when editing an order (✏️ Змінити). */
 export function editQuantityPrompt(orderId: string): string {
-  return `✏️ Заказ #${orderId.slice(0, 8)}: введите новое количество бутылей.`;
+  return `✏️ Замовлення #${orderId.slice(0, 8)}: введіть нову кількість бутлів.`;
 }
 
-/** Справка по командам (/help). */
+/** Command reference (/help). */
 export const dispatcherHelp =
-  'Что умеет бот:\n' +
-  '• Новые заказы приходят автоматически — кнопки прямо под сообщением.\n' +
-  '/orders — активные заказы (created/accepted) списком\n' +
-  '/prices — посмотреть и изменить цены\n' +
-  '/stats — статистика по заказам\n' +
-  '/help — эта справка';
+  'Що вміє бот:\n' +
+  '• Нові замовлення надходять автоматично — кнопки прямо під повідомленням.\n' +
+  '/orders — активні замовлення (created/accepted) списком\n' +
+  '/prices — переглянути та змінити ціни\n' +
+  '/stats — статистика за замовленнями\n' +
+  '/help — ця довідка';
 
 /**
- * Команды для меню Telegram («/»). Регистрируются через setMyCommands при
- * старте — диспетчер видит подсказки, не запоминая команды.
+ * Commands for the Telegram menu ("/"). Registered via setMyCommands at startup —
+ * the dispatcher sees hints without memorising the commands.
  */
 export const dispatcherCommands = [
-  { command: 'orders', description: '📋 Активные заказы' },
-  { command: 'prices', description: '💰 Цены' },
+  { command: 'orders', description: '📋 Активні замовлення' },
+  { command: 'prices', description: '💰 Ціни' },
   { command: 'stats', description: '📊 Статистика' },
-  { command: 'help', description: '❓ Справка' },
+  { command: 'help', description: '❓ Довідка' },
 ];
 
 /**
- * Строка заказа в привычном диспетчеру формате — её удобно переслать водителю
- * (SPEC §7). Повторный: «2по75 Адрес», первый: «2бут [ПЕРВЫЙ +помпа] Адрес».
- * Коммент — в скобках, как в примере спеки.
+ * Order line in the dispatcher's usual format — convenient to forward to the
+ * driver (SPEC §7). Repeat: "2по75 Address", first: "2бут [ПЕРШИЙ +помпа] Address".
+ * Comment — in parentheses, as in the spec example.
  */
 function driverLine(order: Order, address: Address): string {
-  const pumpMark = order.electro ? '+электро' : '+помпа';
+  const pumpMark = order.electro ? '+електро' : '+помпа';
   const ownPump = order.pumpAddon ? ' +помпа' : '';
   const qty =
     order.kind === OrderKind.STARTER_KIT
-      ? `${order.bottles}бут [ПЕРВЫЙ ${pumpMark}]`
+      ? `${order.bottles}бут [ПЕРШИЙ ${pumpMark}]`
       : order.kind === OrderKind.OWN_TARA
         ? `${order.bottles}по${order.totalPrice / order.bottles} [СВОЯ ТАРА${ownPump}]`
         : `${order.bottles}по${order.totalPrice / order.bottles}`;
@@ -109,7 +109,7 @@ function driverLine(order: Order, address: Address): string {
   return `${qty} ${address.raw}${comment}`;
 }
 
-/** Полное сообщение о заказе для диспетчера (SPEC §7). Заголовок — по статусу. */
+/** Full order message for the dispatcher (SPEC §7). Header — by status. */
 export function orderMessage(
   order: Order,
   client: Client,
@@ -117,25 +117,25 @@ export function orderMessage(
 ): string {
   const header = STATUS_HEADER[order.status];
   const firstMark = client.pendingReview
-    ? '  [СВЕРИТЬ ⚠️ заявлен действующим]'
+    ? '  [ЗВІРИТИ ⚠️ заявлений діючим]'
     : order.kind === OrderKind.STARTER_KIT
-      ? '  [ПЕРВЫЙ ЗАКАЗ ⚠️]'
+      ? '  [ПЕРШЕ ЗАМОВЛЕННЯ ⚠️]'
       : order.kind === OrderKind.OWN_TARA
-        ? '  [СВОЯ ТАРА ⚠️ проверить бак]'
+        ? '  [СВОЯ ТАРА ⚠️ перевірити бак]'
         : '';
-  const name = client.name ?? 'без имени';
+  const name = client.name ?? 'без імені';
   return (
     `${header} #${order.id.slice(0, 8)}${firstMark}\n` +
     `🕒 ${formatDateTime(order.createdAt)}\n` +
     `${driverLine(order, address)}\n` +
-    `Клиент: ${name} (${client.phone})\n` +
-    `Сумма: ${order.totalPrice} грн`
+    `Клієнт: ${name} (${client.phone})\n` +
+    `Сума: ${order.totalPrice} грн`
   );
 }
 
 /**
- * Кнопки под заказом по текущему статусу (SPEC §7).
- * DELIVERED/CANCELLED — терминальные, кнопок нет (undefined снимает клавиатуру).
+ * Buttons under an order by its current status (SPEC §7).
+ * DELIVERED/CANCELLED — terminal, no buttons (undefined removes the keyboard).
  */
 export function orderKeyboard(
   orderId: string,
@@ -144,56 +144,56 @@ export function orderKeyboard(
   switch (status) {
     case OrderStatus.CREATED:
       return new InlineKeyboard()
-        .text('✅ Принят', `acc:${orderId}`)
-        .text('❌ Отменить', `can:${orderId}`)
+        .text('✅ Прийнято', `acc:${orderId}`)
+        .text('❌ Скасувати', `can:${orderId}`)
         .row()
-        .text('✏️ Изменить', `edit:${orderId}`);
+        .text('✏️ Змінити', `edit:${orderId}`);
     case OrderStatus.ACCEPTED:
       return new InlineKeyboard()
-        .text('🚚 Доставлен', `del:${orderId}`)
-        .text('❌ Отменить', `can:${orderId}`)
+        .text('🚚 Доставлено', `del:${orderId}`)
+        .text('❌ Скасувати', `can:${orderId}`)
         .row()
-        .text('✏️ Изменить', `edit:${orderId}`);
+        .text('✏️ Змінити', `edit:${orderId}`);
     default:
       return undefined;
   }
 }
 
-/** Уведомление диспетчеру об отмене заказа клиентом из бота (SPEC §9). */
+/** Notify the dispatcher about an order cancelled by the client from the bot (SPEC §9). */
 export function clientCancelledMessage(order: Order, client: Client): string {
-  const name = client.name ?? 'без имени';
+  const name = client.name ?? 'без імені';
   return (
-    `❌ Клиент отменил заказ #${order.id.slice(0, 8)}\n` +
-    `Клиент: ${name} (${client.phone})`
+    `❌ Клієнт скасував замовлення #${order.id.slice(0, 8)}\n` +
+    `Клієнт: ${name} (${client.phone})`
   );
 }
 
-/** Текущие цены (SPEC §7, /prices). */
+/** Current prices (SPEC §7, /prices). */
 export function pricesMessage(prices: PriceSettings): string {
   return (
-    'Текущие цены:\n' +
-    `Вода: 1 — ${prices.price1}, от 2 — ${prices.priceFrom2}, от 6 — ${prices.priceFrom6} грн\n` +
-    `Залог за бак: ${prices.depositPerBottle} грн\n` +
-    `Помпа: ${prices.pumpPrice} грн (электро ${prices.electroPumpPrice})\n` +
+    'Поточні ціни:\n' +
+    `Вода: 1 — ${prices.price1}, від 2 — ${prices.priceFrom2}, від 6 — ${prices.priceFrom6} грн\n` +
+    `Застава за бак: ${prices.depositPerBottle} грн\n` +
+    `Помпа: ${prices.pumpPrice} грн (електро ${prices.electroPumpPrice})\n` +
     `Старт-вода: ${prices.waterStartPrice} грн/бак`
   );
 }
 
-/** Кнопка отмены под запросом нового значения цены. */
+/** Cancel button under the new price value prompt. */
 export function priceEditCancelKeyboard(): InlineKeyboard {
-  return new InlineKeyboard().text('❌ Отмена', 'pe_cancel');
+  return new InlineKeyboard().text('❌ Скасувати', 'pe_cancel');
 }
 
-/** Кнопки выбора поля цены для редактирования (SPEC §7). */
+/** Buttons to pick a price field for editing (SPEC §7). */
 export function pricesKeyboard(): InlineKeyboard {
   return new InlineKeyboard()
     .text('Вода 1', 'pe:price1')
-    .text('Вода от2', 'pe:priceFrom2')
-    .text('Вода от6', 'pe:priceFrom6')
+    .text('Вода від2', 'pe:priceFrom2')
+    .text('Вода від6', 'pe:priceFrom6')
     .row()
-    .text('Залог', 'pe:depositPerBottle')
+    .text('Застава', 'pe:depositPerBottle')
     .text('Помпа', 'pe:pumpPrice')
-    .text('Помпа эл', 'pe:electroPumpPrice')
+    .text('Помпа ел', 'pe:electroPumpPrice')
     .row()
     .text('Старт-вода', 'pe:waterStartPrice');
 }
