@@ -1,8 +1,8 @@
 import type { PrismaService } from '../../prisma/prisma.service';
 import { ClientsService } from './clients.service';
 
-// PrismaService тянет сгенерированный клиент Prisma 7 (ESM, import.meta), который
-// ts-jest не компилирует под CommonJS. В юнит-тесте клиент не нужен — мокаем модуль.
+// PrismaService pulls the generated Prisma 7 client (ESM, import.meta), which
+// ts-jest does not compile under CommonJS. The client is not needed in the unit test — mock the module.
 jest.mock('../../prisma/prisma.service', () => ({ PrismaService: class {} }));
 
 describe('ClientsService', () => {
@@ -35,7 +35,7 @@ describe('ClientsService', () => {
   });
 
   describe('getDefaultAddress', () => {
-    it('ищет default-адрес клиента', async () => {
+    it('looks up the client default address', async () => {
       const addr = { id: 'a1', isDefault: true };
       prisma.address.findFirst.mockResolvedValue(addr);
 
@@ -47,27 +47,27 @@ describe('ClientsService', () => {
   });
 
   describe('addAddress', () => {
-    it('создаёт обычный (не default) адрес без транзакции', async () => {
+    it('creates a regular (non-default) address without a transaction', async () => {
       const addr = { id: 'a1', isDefault: false };
       prisma.address.create.mockResolvedValue(addr);
 
-      await expect(service.addAddress('c1', { raw: 'ул. 1' })).resolves.toEqual(
+      await expect(service.addAddress('c1', { raw: 'St. 1' })).resolves.toEqual(
         addr,
       );
       expect(prisma.$transaction).not.toHaveBeenCalled();
       expect(prisma.address.create).toHaveBeenCalledWith({
-        data: { clientId: 'c1', raw: 'ул. 1', comment: null, isDefault: false },
+        data: { clientId: 'c1', raw: 'St. 1', comment: null, isDefault: false },
       });
     });
 
-    it('при isDefault сбрасывает старый default в транзакции', async () => {
+    it('on isDefault resets the old default within a transaction', async () => {
       const addr = { id: 'a2', isDefault: true };
-      // $transaction получает массив prisma-операций и возвращает их результаты:
-      // [результат updateMany, созданный адрес].
+      // $transaction receives an array of prisma operations and returns their results:
+      // [updateMany result, the created address].
       prisma.$transaction.mockResolvedValue([{ count: 1 }, addr]);
 
       await expect(
-        service.addAddress('c1', { raw: 'ул. 2', isDefault: true }),
+        service.addAddress('c1', { raw: 'St. 2', isDefault: true }),
       ).resolves.toEqual(addr);
 
       expect(prisma.address.updateMany).toHaveBeenCalledWith({
@@ -75,14 +75,14 @@ describe('ClientsService', () => {
         data: { isDefault: false },
       });
       expect(prisma.address.create).toHaveBeenCalledWith({
-        data: { clientId: 'c1', raw: 'ул. 2', comment: null, isDefault: true },
+        data: { clientId: 'c1', raw: 'St. 2', comment: null, isDefault: true },
       });
       expect(prisma.$transaction).toHaveBeenCalled();
     });
   });
 
   describe('setTaraState', () => {
-    it('перезаписывает баланс тары и помпу клиента', async () => {
+    it('overwrites the client tara balance and pump', async () => {
       const updated = { id: 'c1', bottlesOnHand: 3, hasPump: true };
       prisma.client.update.mockResolvedValue(updated);
 
@@ -97,31 +97,31 @@ describe('ClientsService', () => {
   });
 
   describe('setDefaultAddress', () => {
-    it('обновляет существующий default-адрес (без создания дубля)', async () => {
+    it('updates the existing default address (without creating a dupe)', async () => {
       prisma.address.findFirst.mockResolvedValue({ id: 'a1', isDefault: true });
-      prisma.address.update.mockResolvedValue({ id: 'a1', raw: 'ул. 9' });
+      prisma.address.update.mockResolvedValue({ id: 'a1', raw: 'St. 9' });
 
       await service.setDefaultAddress('c1', {
-        raw: 'ул. 9',
-        comment: 'этаж 3',
+        raw: 'St. 9',
+        comment: 'floor 3',
       });
 
       expect(prisma.address.update).toHaveBeenCalledWith({
         where: { id: 'a1' },
-        data: { raw: 'ул. 9', comment: 'этаж 3' },
+        data: { raw: 'St. 9', comment: 'floor 3' },
       });
       expect(prisma.address.create).not.toHaveBeenCalled();
     });
 
-    it('создаёт default-адрес, если его ещё нет', async () => {
+    it('creates a default address if there is none yet', async () => {
       prisma.address.findFirst.mockResolvedValue(null);
       prisma.$transaction.mockResolvedValue([{ count: 0 }, { id: 'a2' }]);
 
-      await service.setDefaultAddress('c1', { raw: 'ул. 1' });
+      await service.setDefaultAddress('c1', { raw: 'St. 1' });
 
       expect(prisma.address.update).not.toHaveBeenCalled();
       expect(prisma.address.create).toHaveBeenCalledWith({
-        data: { clientId: 'c1', raw: 'ул. 1', comment: null, isDefault: true },
+        data: { clientId: 'c1', raw: 'St. 1', comment: null, isDefault: true },
       });
     });
   });

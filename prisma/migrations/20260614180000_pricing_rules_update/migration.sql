@@ -1,5 +1,5 @@
--- Прайс с 12.05.2026 (PRODUCT.md «Ценообразование»):
--- сетка воды 1 / от 2 / от 6, залог 450, помпа 250 + электро 270, старт-вода 50.
+-- Price from 2026-05-12 (PRODUCT.md "Pricing"):
+-- water grid 1 / from 2 / from 6, deposit 450, pump 250 + electro 270, starter water 50.
 
 -- AlterTable
 ALTER TABLE "PriceSettings" DROP COLUMN "price2",
@@ -11,5 +11,5 @@ ADD COLUMN     "waterStartPrice" INTEGER NOT NULL DEFAULT 50,
 ALTER COLUMN "depositPerBottle" SET DEFAULT 450,
 ALTER COLUMN "pumpPrice" SET DEFAULT 250;
 
--- SET DEFAULT не трогает существующие строки — приводим синглтон к актуальным ценам.
+-- SET DEFAULT does not touch existing rows — bring the singleton to the current prices.
 UPDATE "PriceSettings" SET "depositPerBottle" = 450, "pumpPrice" = 250 WHERE "id" = 1;

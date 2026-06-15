@@ -2,9 +2,9 @@ import type { PrismaService } from '../../prisma/prisma.service';
 import type { PriceSettings } from '../../../generated/prisma/client';
 import { PricingSettingsService } from './pricing-settings.service';
 
-// PrismaService тянет сгенерированный клиент Prisma 7 (ESM, import.meta), который
-// ts-jest не компилирует под CommonJS. В юнит-тесте клиент не нужен — мокаем модуль,
-// чтобы реальный импорт не выполнялся; Prisma инжектим собственным мок-объектом.
+// PrismaService pulls the generated Prisma 7 client (ESM, import.meta), which
+// ts-jest does not compile under CommonJS. The client is not needed in the unit test — mock the
+// module so the real import does not run; Prisma is injected via our own mock object.
 jest.mock('../../prisma/prisma.service', () => ({ PrismaService: class {} }));
 
 const row: PriceSettings = {
@@ -39,7 +39,7 @@ describe('PricingSettingsService', () => {
   });
 
   describe('getCurrent', () => {
-    it('читает строку-синглтон по id=1', async () => {
+    it('reads the singleton row by id=1', async () => {
       prisma.priceSettings.findUniqueOrThrow.mockResolvedValue(row);
 
       await expect(service.getCurrent()).resolves.toEqual(row);
@@ -50,7 +50,7 @@ describe('PricingSettingsService', () => {
   });
 
   describe('update', () => {
-    it('обновляет одно поле в строке id=1', async () => {
+    it('updates a single field in the id=1 row', async () => {
       const updated = { ...row, price1: 90 };
       prisma.priceSettings.update.mockResolvedValue(updated);
 
@@ -61,7 +61,7 @@ describe('PricingSettingsService', () => {
       });
     });
 
-    it('бросает ошибку на отрицательное значение и не пишет в БД', () => {
+    it('throws on a negative value and does not write to the DB', () => {
       expect(() => service.update('pumpPrice', -5)).toThrow();
       expect(prisma.priceSettings.update).not.toHaveBeenCalled();
     });

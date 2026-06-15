@@ -1,6 +1,6 @@
 import { PricingService, PriceList } from './pricing.service';
 
-// Дефолтные цены (совпадают с сидом PriceSettings, PRODUCT.md).
+// Default prices (match the PriceSettings seed, PRODUCT.md).
 const prices: PriceList = {
   price1: 80,
   priceFrom2: 70,
@@ -18,8 +18,8 @@ describe('PricingService.calculateTotal', () => {
     service = new PricingService();
   });
 
-  describe('повторный заказ с достаточной тарой — сетка воды 1 / от 2 / от 6', () => {
-    // bottlesOnHand=100 заведомо ≥ заказа → добора нет, чистая сетка.
+  describe('repeat order with enough tara — water grid 1 / from 2 / from 6', () => {
+    // bottlesOnHand=100 is surely ≥ the order → no top-up, pure grid.
     it.each([
       [1, 80],
       [2, 140],
@@ -27,99 +27,99 @@ describe('PricingService.calculateTotal', () => {
       [5, 350],
       [6, 390],
       [7, 455],
-    ])('%i бутыл(ей) → %i грн', (bottles, expected) => {
+    ])('%i bottle(s) → %i UAH', (bottles, expected) => {
       expect(service.calculateTotal(bottles, 'REPEAT', prices, 100)).toBe(
         expected,
       );
     });
   });
 
-  describe('повторный заказ — добор тары (вода по сетке на всё + залог за новый бак)', () => {
-    it('на руках 1, заказ 2 → 2×70 + 450 = 590', () => {
+  describe('repeat order — tara top-up (water by grid for all + deposit per new bottle)', () => {
+    it('1 on hand, order 2 → 2×70 + 450 = 590', () => {
       expect(service.calculateTotal(2, 'REPEAT', prices, 1)).toBe(590);
     });
 
-    it('на руках 2, заказ 3 → 3×70 + 450 = 660', () => {
+    it('2 on hand, order 3 → 3×70 + 450 = 660', () => {
       expect(service.calculateTotal(3, 'REPEAT', prices, 2)).toBe(660);
     });
 
-    it('на руках 3, заказ 2 (≤ остатка) → чистая сетка 140, без залога', () => {
+    it('3 on hand, order 2 (≤ remainder) → pure grid 140, no deposit', () => {
       expect(service.calculateTotal(2, 'REPEAT', prices, 3)).toBe(140);
     });
 
-    it('на руках 0, заказ 3 → вода 3×70 + 3×450 = 1560', () => {
+    it('0 on hand, order 3 → water 3×70 + 3×450 = 1560', () => {
       expect(service.calculateTotal(3, 'REPEAT', prices, 0)).toBe(1560);
     });
   });
 
-  describe('newTara — сколько баков под залог', () => {
-    it('STARTER_KIT — все баки', () => {
+  describe('newTara — how many bottles under deposit', () => {
+    it('STARTER_KIT — all bottles', () => {
       expect(service.newTara(2, 'STARTER_KIT', 0)).toBe(2);
     });
 
-    it('REPEAT — сверх остатка на руках', () => {
+    it('REPEAT — above the remainder on hand', () => {
       expect(service.newTara(3, 'REPEAT', 2)).toBe(1);
       expect(service.newTara(2, 'REPEAT', 5)).toBe(0);
     });
 
-    it('OWN_TARA — ноль (тара клиента)', () => {
+    it('OWN_TARA — zero (the client tara)', () => {
       expect(service.newTara(4, 'OWN_TARA', 0)).toBe(0);
     });
   });
 
-  describe('первый заказ — стартовый комплект (залог+помпа+старт-вода)', () => {
+  describe('first order — starter kit (deposit+pump+starter water)', () => {
     it.each([
       [1, 750],
       [2, 1250],
       [3, 1750],
-    ])('%i бутыл(ей) → %i грн', (bottles, expected) => {
+    ])('%i bottle(s) → %i UAH', (bottles, expected) => {
       expect(service.calculateTotal(bottles, 'STARTER_KIT', prices)).toBe(
         expected,
       );
     });
   });
 
-  describe('своя тара (OWN_TARA) — только вода по сетке, залог 0', () => {
+  describe('own bottles (OWN_TARA) — water by grid only, deposit 0', () => {
     it.each([
       [1, 80],
       [3, 210],
       [6, 390],
-    ])('%i бутыл(ей) → %i грн', (bottles, expected) => {
+    ])('%i bottle(s) → %i UAH', (bottles, expected) => {
       expect(service.calculateTotal(bottles, 'OWN_TARA', prices)).toBe(
         expected,
       );
     });
   });
 
-  describe('опции помпы (T5)', () => {
-    it('комплект с электро-помпой: 1 бак → 450 + 270 + 50 = 770', () => {
+  describe('pump options (T5)', () => {
+    it('kit with an electric pump: 1 bottle → 450 + 270 + 50 = 770', () => {
       expect(
         service.calculateTotal(1, 'STARTER_KIT', prices, 0, { electro: true }),
       ).toBe(770);
     });
 
-    it('комплект обычный (без electro) → 750', () => {
+    it('standard kit (without electro) → 750', () => {
       expect(service.calculateTotal(1, 'STARTER_KIT', prices, 0, {})).toBe(750);
     });
 
-    it('своя тара с докупкой помпы: 2 бака → 2×70 + 250 = 390', () => {
+    it('own bottles with a pump add-on: 2 bottles → 2×70 + 250 = 390', () => {
       expect(
         service.calculateTotal(2, 'OWN_TARA', prices, 0, { pumpAddon: true }),
       ).toBe(390);
     });
   });
 
-  describe('edge-кейсы', () => {
-    it('бросает ошибку на 0 бутылей', () => {
+  describe('edge cases', () => {
+    it('throws on 0 bottles', () => {
       expect(() => service.calculateTotal(0, 'REPEAT', prices)).toThrow();
       expect(() => service.calculateTotal(0, 'STARTER_KIT', prices)).toThrow();
     });
 
-    it('бросает ошибку на отрицательное количество', () => {
+    it('throws on a negative quantity', () => {
       expect(() => service.calculateTotal(-1, 'REPEAT', prices)).toThrow();
     });
 
-    it('бросает ошибку на дробное количество', () => {
+    it('throws on a fractional quantity', () => {
       expect(() => service.calculateTotal(1.5, 'REPEAT', prices)).toThrow();
     });
   });

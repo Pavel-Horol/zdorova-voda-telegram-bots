@@ -272,9 +272,7 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
       case 'edit-price': {
         const parsed = parsePriceValue(text);
         if (!parsed.ok) {
-          await ctx.reply(
-            'Потрібне ціле невід’ємне число. Спробуйте ще раз.',
-          );
+          await ctx.reply('Потрібне ціле невід’ємне число. Спробуйте ще раз.');
           return;
         }
         const updated = await this.pricingSettings.update(

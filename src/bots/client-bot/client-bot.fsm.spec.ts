@@ -14,39 +14,39 @@ import {
 } from './client-bot.fsm';
 
 /**
- * Characterization-тесты «Назад» (бывший onBack): фиксируют ТЕКУЩЕЕ поведение
- * ветвления по снятому со стека шагу. Таблица повторяет все ветки исходного
- * хендлера, включая защитную (пустой стек) и зависящую от адреса.
+ * Characterization tests for "Back" (former onBack): pin the CURRENT branching
+ * behaviour by the step popped off the stack. The table mirrors every branch of the
+ * original handler, including the defensive one (empty stack) and the address-dependent one.
  */
 describe('resolveBack', () => {
-  it('пустой стек (prev === undefined) → главное меню', () => {
+  it('empty stack (prev === undefined) → main menu', () => {
     expect(resolveBack(undefined, false)).toBe('main-menu');
     expect(resolveBack(undefined, true)).toBe('main-menu');
   });
 
-  it('prev === MainMenu → главное меню', () => {
+  it('prev === MainMenu → main menu', () => {
     expect(resolveBack(Step.MainMenu, false)).toBe('main-menu');
   });
 
-  it('prev === AwaitAddress → промпт адреса', () => {
+  it('prev === AwaitAddress → address prompt', () => {
     expect(resolveBack(Step.AwaitAddress, true)).toBe('address-prompt');
   });
 
-  it('prev === AwaitComment → промпт комментария', () => {
+  it('prev === AwaitComment → comment prompt', () => {
     expect(resolveBack(Step.AwaitComment, true)).toBe('comment-prompt');
   });
 
-  describe('prev === ChooseQty (зависит от наличия адреса)', () => {
-    it('адрес есть → выбор количества', () => {
+  describe('prev === ChooseQty (depends on whether an address exists)', () => {
+    it('address exists → quantity selection', () => {
       expect(resolveBack(Step.ChooseQty, true)).toBe('choose-qty');
     });
 
-    it('адреса нет → обратно к вводу адреса', () => {
+    it('no address → back to address input', () => {
       expect(resolveBack(Step.ChooseQty, false)).toBe('address-prompt');
     });
   });
 
-  it('адрес важен только для ветки количества, остальные его игнорируют', () => {
+  it('the address matters only for the quantity branch, the rest ignore it', () => {
     expect(resolveBack(Step.MainMenu, true)).toBe(
       resolveBack(Step.MainMenu, false),
     );
@@ -60,37 +60,37 @@ describe('resolveBack', () => {
 });
 
 /**
- * Characterization-тесты валидации количества (бывшая инлайн-логика onChooseQty):
- * фиксируют ТЕКУЩЕЕ поведение для корректных, граничных и подделанных значений
- * callback'а. Раньше невалидный ввод приводил к молчаливому `return` в хендлере —
- * здесь это `null` (хендлер на `null` так же выходит без действий).
+ * Characterization tests for quantity validation (former inline logic of onChooseQty):
+ * pin the CURRENT behaviour for valid, boundary, and forged callback values. Previously
+ * invalid input led to a silent `return` in the handler — here it is `null` (the handler
+ * on `null` also exits without action).
  */
 describe('parseQty', () => {
-  it('корректное количество в диапазоне 1..MAX_ORDER_QTY → само число', () => {
+  it('valid quantity in the range 1..MAX_ORDER_QTY → the number itself', () => {
     expect(parseQty('1')).toBe(1);
     expect(parseQty('3')).toBe(3);
     expect(parseQty('5')).toBe(5);
   });
 
-  it('граница MAX_ORDER_QTY включительно → число', () => {
+  it('boundary MAX_ORDER_QTY inclusive → number', () => {
     expect(parseQty(String(MAX_ORDER_QTY))).toBe(MAX_ORDER_QTY);
   });
 
-  it('превышение MAX_ORDER_QTY (подделанный callback) → null', () => {
+  it('exceeding MAX_ORDER_QTY (forged callback) → null', () => {
     expect(parseQty(String(MAX_ORDER_QTY + 1))).toBeNull();
     expect(parseQty('1000')).toBeNull();
   });
 
-  it('значение меньше 1 → null', () => {
+  it('value less than 1 → null', () => {
     expect(parseQty('0')).toBeNull();
     expect(parseQty('-5')).toBeNull();
   });
 
-  it('не целое число → null', () => {
+  it('non-integer number → null', () => {
     expect(parseQty('2.5')).toBeNull();
   });
 
-  it('не число → null', () => {
+  it('not a number → null', () => {
     expect(parseQty('abc')).toBeNull();
     expect(parseQty('')).toBeNull();
     expect(parseQty('3a')).toBeNull();
@@ -98,19 +98,19 @@ describe('parseQty', () => {
 });
 
 /**
- * Юнит-тесты переходов, перенесённых из хендлеров (onChooseQty / finalizeAddress
- * / renderConfirm). Поведение тождественно исходным веткам в сервисе.
+ * Unit tests for the transitions moved out of the handlers (onChooseQty /
+ * finalizeAddress / renderConfirm). Behaviour is identical to the original service branches.
  */
-describe('resolveStartOrder (из startOrder)', () => {
-  it('новичок (needsOnboarding) → экран онбординга, раньше всех веток', () => {
+describe('resolveStartOrder (from startOrder)', () => {
+  it('new client (needsOnboarding) → onboarding screen, before all branches', () => {
     expect(resolveStartOrder(false, null, true)).toEqual({
       kind: 'onboarding',
     });
-    // даже при наличии адреса/прошлого заказа онбординг имеет приоритет
+    // even with an address/previous order, onboarding has priority
     expect(resolveStartOrder(true, 3, true)).toEqual({ kind: 'onboarding' });
   });
 
-  it('адреса нет → промпт адреса (первый заказ)', () => {
+  it('no address → address prompt (first order)', () => {
     expect(resolveStartOrder(false, null, false)).toEqual({
       kind: 'address-prompt',
     });
@@ -119,7 +119,7 @@ describe('resolveStartOrder (из startOrder)', () => {
     });
   });
 
-  it('адрес есть и был прошлый заказ → confirm с прошлым количеством (повтор в один тап)', () => {
+  it('address exists and there was a previous order → confirm with the previous quantity (one-tap repeat)', () => {
     expect(resolveStartOrder(true, 3, false)).toEqual({
       kind: 'confirm',
       bottles: 3,
@@ -130,7 +130,7 @@ describe('resolveStartOrder (из startOrder)', () => {
     });
   });
 
-  it('адрес есть, заказов не было (null/0) → выбор количества', () => {
+  it('address exists, no orders yet (null/0) → quantity selection', () => {
     expect(resolveStartOrder(true, null, false)).toEqual({
       kind: 'choose-qty',
     });
@@ -139,27 +139,27 @@ describe('resolveStartOrder (из startOrder)', () => {
 });
 
 describe('parseOnboardingChoice', () => {
-  it('валидные варианты → сами себя', () => {
+  it('valid variants → themselves', () => {
     expect(parseOnboardingChoice('kit')).toBe('kit');
     expect(parseOnboardingChoice('own')).toBe('own');
     expect(parseOnboardingChoice('existing')).toBe('existing');
     expect(parseOnboardingChoice('other')).toBe('other');
   });
 
-  it('чужой/подделанный вариант → null', () => {
+  it('foreign/forged variant → null', () => {
     expect(parseOnboardingChoice('admin')).toBeNull();
     expect(parseOnboardingChoice('')).toBeNull();
   });
 });
 
 describe('parseTaraCount', () => {
-  it('целое 1..MAX_ORDER_QTY → число', () => {
+  it('integer 1..MAX_ORDER_QTY → number', () => {
     expect(parseTaraCount('1')).toBe(1);
     expect(parseTaraCount('5')).toBe(5);
     expect(parseTaraCount(String(MAX_ORDER_QTY))).toBe(MAX_ORDER_QTY);
   });
 
-  it('вне границ / не число → null', () => {
+  it('out of bounds / not a number → null', () => {
     expect(parseTaraCount('0')).toBeNull();
     expect(parseTaraCount('-2')).toBeNull();
     expect(parseTaraCount('2.5')).toBeNull();
@@ -169,12 +169,12 @@ describe('parseTaraCount', () => {
 });
 
 describe('parsePumpChoice', () => {
-  it('std/electro → сами себя', () => {
+  it('std/electro → themselves', () => {
     expect(parsePumpChoice('std')).toBe('std');
     expect(parsePumpChoice('electro')).toBe('electro');
   });
 
-  it('чужое → null', () => {
+  it('foreign → null', () => {
     expect(parsePumpChoice('gold')).toBeNull();
     expect(parsePumpChoice('')).toBeNull();
   });
@@ -186,22 +186,22 @@ describe('parseYesNo', () => {
     expect(parseYesNo('no')).toBe(false);
   });
 
-  it('чужое → null', () => {
+  it('foreign → null', () => {
     expect(parseYesNo('maybe')).toBeNull();
     expect(parseYesNo('')).toBeNull();
   });
 });
 
-describe('resolveAfterQty (из onChooseQty)', () => {
-  it('адрес есть → confirm с тем же количеством', () => {
+describe('resolveAfterQty (from onChooseQty)', () => {
+  it('address exists → confirm with the same quantity', () => {
     expect(resolveAfterQty(3, true)).toEqual({ kind: 'confirm', bottles: 3 });
   });
 
-  it('адреса нет → промпт адреса (первый заказ)', () => {
+  it('no address → address prompt (first order)', () => {
     expect(resolveAfterQty(3, false)).toEqual({ kind: 'address-prompt' });
   });
 
-  it('количество прокидывается в intent как есть', () => {
+  it('the quantity is passed into the intent as is', () => {
     expect(resolveAfterQty(1, true)).toEqual({ kind: 'confirm', bottles: 1 });
     expect(resolveAfterQty(MAX_ORDER_QTY, true)).toEqual({
       kind: 'confirm',
@@ -210,34 +210,34 @@ describe('resolveAfterQty (из onChooseQty)', () => {
   });
 });
 
-describe('resolveConfirm (из renderConfirm)', () => {
-  it('bottles задано → confirm с этим количеством', () => {
+describe('resolveConfirm (from renderConfirm)', () => {
+  it('bottles set → confirm with this quantity', () => {
     expect(resolveConfirm(2)).toEqual({ kind: 'confirm', bottles: 2 });
   });
 
-  it('bottles не задано (undefined) → fallback на выбор количества', () => {
+  it('bottles not set (undefined) → fallback to quantity selection', () => {
     expect(resolveConfirm(undefined)).toEqual({ kind: 'choose-qty' });
   });
 
-  it('bottles === 0 → fallback на выбор количества (!bottles, как в исходнике)', () => {
+  it('bottles === 0 → fallback to quantity selection (!bottles, as in the original)', () => {
     expect(resolveConfirm(0)).toEqual({ kind: 'choose-qty' });
   });
 });
 
-describe('resolveFinalizeAddress (из finalizeAddress)', () => {
-  it('адрес введён → к выбору количества', () => {
-    expect(resolveFinalizeAddress('Хмельницкого 2')).toEqual({
+describe('resolveFinalizeAddress (from finalizeAddress)', () => {
+  it('address entered → to quantity selection', () => {
+    expect(resolveFinalizeAddress('Khmelnytskoho 2')).toEqual({
       kind: 'choose-qty',
     });
   });
 
-  it('адреса нет (undefined) → вернуть к вводу адреса', () => {
+  it('no address (undefined) → return to address input', () => {
     expect(resolveFinalizeAddress(undefined)).toEqual({
       kind: 'address-prompt',
     });
   });
 
-  it('пустая строка → вернуть к вводу адреса (!raw, как в исходнике)', () => {
+  it('empty string → return to address input (!raw, as in the original)', () => {
     expect(resolveFinalizeAddress('')).toEqual({ kind: 'address-prompt' });
   });
 });
