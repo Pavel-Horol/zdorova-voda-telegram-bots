@@ -85,8 +85,11 @@ model Order {
   acceptedAt   DateTime?
   deliveredAt  DateTime?
 
-  client  Client  @relation(fields: [clientId], references: [id])
-  address Address @relation(fields: [addressId], references: [id])
+  // onDelete: Cascade — convenience for dev/tests: deleting a Client (or its
+  // Address) wipes the related orders. NOTE: this loses order history and affects
+  // /stats — reconsider before production (e.g. soft-delete or onDelete: Restrict).
+  client  Client  @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  address Address @relation(fields: [addressId], references: [id], onDelete: Cascade)
 
   @@index([clientId])
   @@index([status])
