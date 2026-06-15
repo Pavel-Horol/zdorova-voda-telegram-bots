@@ -59,6 +59,9 @@ export const texts = {
   /** CHOOSE_QTY — prompt to choose the quantity. */
   chooseQty: 'Скільки бутлів 19 л привезти?',
 
+  /** EDIT_MENU — "what to change" before going back to the confirmation (✏️ Змінити). */
+  editMenu: 'Що змінити в замовленні?',
+
   /** ONBOARDING — choice screen for a new client (STEP3 T3). */
   onboarding:
     'Щоб порахувати правильно — що у вас уже є?\n\n' +
@@ -74,12 +77,16 @@ export const texts = {
   /** Invalid number of bottles. */
   ownTaraInvalid: 'Потрібне число від 1. Скільки у вас баків?',
 
-  /** Pump choice in the starter kit (T5). */
-  pumpChoice(pumpPrice: number, electroPrice: number): string {
+  /** Starter kit composition + pump type choice (T5). */
+  pumpChoice(prices: PriceSettings): string {
     return (
+      '🆕 Стартовий комплект — усе для старту:\n' +
+      `• бак 19 л — застава ${prices.depositPerBottle} грн \n` +
+      `• перша вода — ${prices.waterStartPrice} грн/бак\n` +
+      '• помпа — оберіть тип нижче 👇\n\n' +
       'Яка помпа в комплекті?\n' +
-      `• Звичайна — ${pumpPrice} грн\n` +
-      `• Електрична — ${electroPrice} грн`
+      `• Звичайна — ${prices.pumpPrice} грн\n` +
+      `• Електрична — ${prices.electroPumpPrice} грн`
     );
   },
 

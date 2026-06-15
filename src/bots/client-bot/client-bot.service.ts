@@ -26,6 +26,7 @@ import { OrderStatus } from '../../../generated/prisma/enums';
 import { texts } from './client-bot.texts';
 import {
   assertNever,
+  parseEditField,
   parseOnboardingChoice,
   parsePumpChoice,
   parseQty,
@@ -50,6 +51,7 @@ const ORDER_FLOW_STEPS: readonly Step[] = [
   Step.AwaitComment,
   Step.ChooseQty,
   Step.Confirm,
+  Step.EditMenu,
 ];
 
 interface SessionData {
@@ -77,6 +79,12 @@ interface SessionData {
   /** Pump add-on for own bottles (T5, answer "no pump"). */
   pumpAddon?: boolean;
   /**
+   * Edit mode: the client opened "✏️ Змінити" on Confirm and is changing a single
+   * field. While true, field-input handlers return to Confirm instead of continuing
+   * the linear flow. Cleared on reaching Confirm (renderConfirm) and on resetSession.
+   */
+  editing?: boolean;
+  /**
    * message_id of the last sent inline scenario screen. On any transition away
    * from it we strip the keyboard so no "dead" buttons hang in the chat (tapping
    * them is already blocked by step guards, but it looks confusing).
@@ -91,6 +99,8 @@ const CB_CONFIRM_YES = 'confirm:yes';
 const CB_BACK = 'nav:back';
 const CB_CANCEL = 'nav:cancel';
 const CB_SKIP = 'nav:skip';
+const CB_EDIT = 'nav:edit';
+const CB_EDIT_BACK = 'nav:editback';
 
 // Reply button labels of the main menu (also the keys of the text router).
 const BTN_ORDER = '🚰 Замовити воду';
@@ -158,12 +168,30 @@ const commentKeyboard = new InlineKeyboard()
   .text('⏭ Пропустити', CB_SKIP)
   .text('❌ Скасувати', CB_CANCEL);
 
-/** Order confirmation: confirm / edit (= back) / cancel (SPEC §6). */
+/** Order confirmation: confirm / edit (opens the edit menu) / cancel (SPEC §6). */
 const confirmKeyboard = new InlineKeyboard()
   .text('✅ Усе вірно, замовляю', CB_CONFIRM_YES)
   .row()
-  .text('✏️ Змінити', CB_BACK)
+  .text('✏️ Змінити', CB_EDIT)
   .text('❌ Скасувати', CB_CANCEL);
+
+/**
+ * Edit menu (from "✏️ Змінити" on Confirm): pick the field to change. After editing,
+ * the flow returns to Confirm. The pump row is shown only for the starter kit
+ * (`showPump`) — for repeat/own-bottles orders there is no pump choice to change.
+ */
+function buildEditMenuKeyboard(showPump: boolean): InlineKeyboard {
+  const kb = new InlineKeyboard()
+    .text('📦 Кількість', 'ed:qty')
+    .row()
+    .text('📍 Адресу', 'ed:addr')
+    .row()
+    .text('📝 Коментар', 'ed:comment')
+    .row();
+  if (showPump) kb.text('🔌 Помпу', 'ed:pump').row();
+  kb.text('◀ Назад', CB_EDIT_BACK).text('❌ Скасувати', CB_CANCEL);
+  return kb;
+}
 
 /** New-client onboarding: "what do you already have" (STEP3 T3). */
 const onboardingKeyboard = new InlineKeyboard()
@@ -277,6 +305,11 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
     bot.callbackQuery(/^yn:(yes|no)$/, (ctx) => this.onOwnPumpAnswer(ctx));
     bot.callbackQuery(/^qty:([1-9]\d*)$/, (ctx) => this.onChooseQty(ctx));
     bot.callbackQuery(CB_CONFIRM_YES, (ctx) => this.onConfirmYes(ctx));
+    bot.callbackQuery(CB_EDIT, (ctx) => this.onEdit(ctx));
+    bot.callbackQuery(CB_EDIT_BACK, (ctx) => this.onEditBack(ctx));
+    bot.callbackQuery(/^ed:(qty|addr|comment|pump)$/, (ctx) =>
+      this.onEditChoice(ctx),
+    );
     bot.callbackQuery(CB_BACK, (ctx) => this.onBack(ctx));
     bot.callbackQuery(CB_CANCEL, (ctx) => this.onCancel(ctx));
     bot.callbackQuery(CB_SKIP, (ctx) => this.onSkipComment(ctx));
@@ -394,6 +427,17 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
   private async onAddressInput(ctx: BotContext, raw: string): Promise<void> {
     const client = await this.requireClient(ctx);
     if (!client) return;
+    if (ctx.session.editing) {
+      // Edit mode: update only the address (keep the existing comment) and go back
+      // to Confirm — no second pass through the comment step.
+      const addr = await this.clients.getDefaultAddress(client.id);
+      await this.clients.setDefaultAddress(client.id, {
+        raw,
+        comment: addr?.comment ?? null,
+      });
+      await this.returnToConfirm(ctx);
+      return;
+    }
     ctx.session.addressRaw = raw;
     this.pushHistory(ctx, Step.AwaitAddress);
     await this.renderCommentPrompt(ctx);
@@ -417,6 +461,18 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
   ): Promise<void> {
     const client = await this.requireClient(ctx);
     if (!client) return;
+    if (ctx.session.editing) {
+      // Edit mode: update only the comment (keep the saved address) and go back to Confirm.
+      const addr = await this.clients.getDefaultAddress(client.id);
+      if (addr) {
+        await this.clients.setDefaultAddress(client.id, {
+          raw: addr.raw,
+          comment,
+        });
+      }
+      await this.returnToConfirm(ctx);
+      return;
+    }
     const raw = ctx.session.addressRaw;
     const intent = resolveFinalizeAddress(raw);
     if (intent.kind === 'choose-qty') {
@@ -547,6 +603,10 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
     const choice = parsePumpChoice(ctx.match?.[1] ?? '');
     if (choice === null) return;
     ctx.session.electro = choice === 'electro';
+    if (ctx.session.editing) {
+      await this.returnToConfirm(ctx);
+      return;
+    }
     await this.renderAddressPrompt(ctx);
   }
 
@@ -685,7 +745,69 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
     await this.renderScreen(ctx, { kind: 'order-done' }, { client });
   }
 
-  /** "Back" (incl. "Edit" on Confirm): one step back along the history stack. */
+  /**
+   * "✏️ Змінити" on Confirm: open the edit menu (pick the field to change). The pump
+   * row is shown only for the starter kit — `session.electro` is set (boolean) only
+   * on that branch, undefined for repeat/own-bottles orders.
+   */
+  private async onEdit(ctx: BotContext): Promise<void> {
+    await ctx.answerCallbackQuery();
+    if (ctx.session.step !== Step.Confirm) return;
+    await this.renderEditMenu(ctx);
+  }
+
+  /**
+   * Edit menu choice: enter edit mode and open the matching field screen. The
+   * field's input handler returns to Confirm afterwards (see `editing` flag).
+   */
+  private async onEditChoice(ctx: BotContext): Promise<void> {
+    await ctx.answerCallbackQuery();
+    if (ctx.session.step !== Step.EditMenu) return;
+    const field = parseEditField(ctx.match?.[1] ?? '');
+    if (field === null) return;
+    const client = await this.requireClient(ctx);
+    if (!client) return;
+    ctx.session.editing = true;
+    switch (field) {
+      case 'qty':
+        await this.renderChooseQty(ctx, client.id);
+        return;
+      case 'addr':
+        await this.renderAddressPrompt(ctx);
+        return;
+      case 'comment':
+        await this.renderCommentPrompt(ctx);
+        return;
+      case 'pump':
+        await this.renderPumpChoice(ctx);
+        return;
+    }
+  }
+
+  /** "◀ Назад" on the edit menu: return to Confirm without changing anything. */
+  private async onEditBack(ctx: BotContext): Promise<void> {
+    await ctx.answerCallbackQuery();
+    if (ctx.session.step !== Step.EditMenu) return;
+    await this.returnToConfirm(ctx);
+  }
+
+  /**
+   * Re-renders Confirm after a single-field edit. Loads the (now updated) default
+   * address; if it somehow disappeared, falls back to the address prompt (staying in
+   * edit mode). renderConfirm clears the `editing` flag.
+   */
+  private async returnToConfirm(ctx: BotContext): Promise<void> {
+    const client = await this.requireClient(ctx);
+    if (!client) return;
+    const address = await this.clients.getDefaultAddress(client.id);
+    if (!address) {
+      await this.renderAddressPrompt(ctx);
+      return;
+    }
+    await this.renderConfirm(ctx, client.id, address);
+  }
+
+  /** "Back" on the quantity screen: one step back along the history stack. */
   private async onBack(ctx: BotContext): Promise<void> {
     await ctx.answerCallbackQuery();
     const client = await this.requireClient(ctx);
@@ -802,11 +924,7 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
   private async renderPumpChoice(ctx: BotContext): Promise<void> {
     ctx.session.step = Step.PumpChoice;
     const prices = await this.pricingSettings.getCurrent();
-    await this.replyInline(
-      ctx,
-      texts.pumpChoice(prices.pumpPrice, prices.electroPumpPrice),
-      pumpChoiceKeyboard,
-    );
+    await this.replyInline(ctx, texts.pumpChoice(prices), pumpChoiceKeyboard);
   }
 
   private async renderOwnPumpAsk(ctx: BotContext): Promise<void> {
@@ -838,6 +956,17 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
     await this.replyInline(ctx, texts.chooseQty, buildQtyKeyboard(repeatN));
   }
 
+  private async renderEditMenu(ctx: BotContext): Promise<void> {
+    ctx.session.step = Step.EditMenu;
+    // Pump is part of the starter kit only; electro is a boolean on that branch.
+    const showPump = ctx.session.electro !== undefined;
+    await this.replyInline(
+      ctx,
+      texts.editMenu,
+      buildEditMenuKeyboard(showPump),
+    );
+  }
+
   private async renderConfirm(
     ctx: BotContext,
     clientId: string,
@@ -852,6 +981,8 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
       electro: ctx.session.electro,
       pumpAddon: ctx.session.pumpAddon,
     });
+    // Reaching Confirm ends any single-field edit (covers the edit-quantity path too).
+    ctx.session.editing = false;
     ctx.session.step = Step.Confirm;
     await this.replyInline(ctx, texts.confirm(quote, address), confirmKeyboard);
   }
@@ -914,6 +1045,7 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
     ctx.session.existingClient = undefined;
     ctx.session.electro = undefined;
     ctx.session.pumpAddon = undefined;
+    ctx.session.editing = undefined;
     ctx.session.history = [];
   }
 

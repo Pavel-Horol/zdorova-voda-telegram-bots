@@ -17,6 +17,7 @@ import {
 } from '../../modules/pricing-settings/pricing-settings.service';
 import {
   DISPATCHER_BOT,
+  dispatcherChatIds,
   type DispatcherBot,
   type DispatcherContext,
   type DispatcherSession,
@@ -109,12 +110,12 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
     await this.bot?.stop();
   }
 
-  /** Let through updates only from the dispatcher chat (if it is set). */
+  /** Let through updates only from a configured dispatcher chat (if any are set). */
   private useChatGuard(bot: DispatcherBot): void {
-    const allowedChat = this.config.get<string>('DISPATCHER_CHAT_ID');
-    if (!allowedChat) return;
+    const allowed = dispatcherChatIds(this.config);
+    if (!allowed.length) return;
     bot.use(async (ctx, next) => {
-      if (ctx.chat && String(ctx.chat.id) !== allowedChat) return;
+      if (ctx.chat && !allowed.includes(String(ctx.chat.id))) return;
       await next();
     });
   }

@@ -1,5 +1,6 @@
 import {
   MAX_ORDER_QTY,
+  parseEditField,
   parseOnboardingChoice,
   parsePumpChoice,
   parseQty,
@@ -189,6 +190,20 @@ describe('parseYesNo', () => {
   it('foreign → null', () => {
     expect(parseYesNo('maybe')).toBeNull();
     expect(parseYesNo('')).toBeNull();
+  });
+});
+
+describe('parseEditField', () => {
+  it('valid fields → themselves', () => {
+    expect(parseEditField('qty')).toBe('qty');
+    expect(parseEditField('addr')).toBe('addr');
+    expect(parseEditField('comment')).toBe('comment');
+    expect(parseEditField('pump')).toBe('pump');
+  });
+
+  it('foreign/forged field → null', () => {
+    expect(parseEditField('price')).toBeNull();
+    expect(parseEditField('')).toBeNull();
   });
 });
 

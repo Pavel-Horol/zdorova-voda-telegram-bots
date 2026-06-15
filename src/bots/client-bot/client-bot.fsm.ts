@@ -15,6 +15,7 @@ export enum Step {
   AwaitComment = 'AWAIT_COMMENT',
   ChooseQty = 'CHOOSE_QTY',
   Confirm = 'CONFIRM',
+  EditMenu = 'EDIT_MENU',
 }
 
 /** Choice on the new-client onboarding screen (PRODUCT.md, STEP3 T3). */
@@ -60,6 +61,26 @@ export function parseYesNo(raw: string): boolean | null {
   if (raw === 'yes') return true;
   if (raw === 'no') return false;
   return null;
+}
+
+/** Field the client picks to change on the confirmation edit menu (✏️ Змінити). */
+export type EditField = 'qty' | 'addr' | 'comment' | 'pump';
+
+/**
+ * Parses the edit-menu choice from `callback_data` (`ed:<field>`). Untrusted input —
+ * a foreign value → null (the handler exits without action). `pump` is only offered
+ * for the starter kit, but parsing it is harmless for other kinds (electro is then ignored).
+ */
+export function parseEditField(raw: string): EditField | null {
+  switch (raw) {
+    case 'qty':
+    case 'addr':
+    case 'comment':
+    case 'pump':
+      return raw;
+    default:
+      return null;
+  }
 }
 
 /**

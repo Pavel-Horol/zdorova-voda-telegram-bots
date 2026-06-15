@@ -7,6 +7,21 @@ import type { EditablePriceField } from '../../modules/pricing-settings/pricing-
 export const DISPATCHER_BOT = Symbol('DISPATCHER_BOT');
 
 /**
+ * Configured dispatcher chat IDs (DISPATCHER_CHAT_ID + DISPATCHER2_CHAT_ID).
+ * Order notifications are sent to all of them; the chat guard admits all of them.
+ * Empty/missing values are dropped and duplicates removed. Add more numbered vars
+ * here to support further dispatchers.
+ */
+export function dispatcherChatIds(config: ConfigService): string[] {
+  const raw = [
+    config.get<string>('DISPATCHER_CHAT_ID'),
+    config.get<string>('DISPATCHER2_CHAT_ID'),
+  ];
+  const ids = raw.map((v) => v?.trim()).filter((v): v is string => !!v);
+  return [...new Set(ids)];
+}
+
+/**
  * Dispatcher session. Two mutually exclusive text input modes:
  * price editing (/prices) and quantity editing in an order (✏️).
  */
