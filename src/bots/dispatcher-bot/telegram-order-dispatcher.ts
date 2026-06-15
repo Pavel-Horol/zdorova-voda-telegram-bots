@@ -7,6 +7,7 @@ import {
   orderMessage,
   orderKeyboard,
   clientCancelledMessage,
+  callbackRequestMessage,
 } from './dispatcher-bot.texts';
 
 /**
@@ -57,5 +58,16 @@ export class TelegramOrderDispatcher implements OrderDispatcher {
       chatId,
       clientCancelledMessage(order, client),
     );
+  }
+
+  async notifyCallbackRequest(client: Client): Promise<void> {
+    const chatId = this.config.get<string>('DISPATCHER_CHAT_ID');
+    if (!this.bot || !chatId) {
+      this.logger.warn(
+        `DISPATCHER_BOT/CHAT_ID not configured — callback request from ${client.phone} not sent`,
+      );
+      return;
+    }
+    await this.bot.api.sendMessage(chatId, callbackRequestMessage(client));
   }
 }

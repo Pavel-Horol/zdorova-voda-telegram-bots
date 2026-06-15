@@ -22,6 +22,11 @@ export interface OrderDispatcher {
    * dispatcher's message with inline buttons is stale by now — send a separate notification.
    */
   notifyClientCancelled(order: Order, client: Client): Promise<void>;
+  /**
+   * The client picked a non-standard onboarding case ("Other") that the dispatcher
+   * handles by phone — notify the dispatcher to call the client back (no order yet).
+   */
+  notifyCallbackRequest(client: Client): Promise<void>;
 }
 
 /**
@@ -47,6 +52,13 @@ export class LogOrderDispatcher implements OrderDispatcher {
 
   notifyClientCancelled(order: Order, client: Client): Promise<void> {
     this.logger.log(`Order ${order.id} cancelled by client ${client.phone}`);
+    return Promise.resolve();
+  }
+
+  notifyCallbackRequest(client: Client): Promise<void> {
+    this.logger.log(
+      `Callback requested by client ${client.phone} (${client.name ?? 'no name'})`,
+    );
     return Promise.resolve();
   }
 }

@@ -202,6 +202,19 @@ export class OrdersService {
   }
 
   /**
+   * The client asked the dispatcher to call back for a non-standard onboarding case
+   * ("Other"): no order is created — just notify the dispatcher (STEP3 T4). Errors
+   * propagate so the caller can react (the client already has the support phone).
+   */
+  async requestCallback(clientId: string): Promise<void> {
+    const client = await this.clients.getById(clientId);
+    if (!client) {
+      throw new Error(`client not found: ${clientId}`);
+    }
+    await this.dispatcher.notifyCallbackRequest(client);
+  }
+
+  /**
    * Computes the price preview for the confirmation screen (SPEC §6) without
    * creating an order. Uses the same pricing/pricing-settings as createOrder — a
    * single source of truth for the total (CLAUDE.md §1). perBottle is derived from

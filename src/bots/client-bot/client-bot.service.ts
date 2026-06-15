@@ -492,10 +492,18 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
         await this.renderOwnTaraCount(ctx);
         return;
       case 'other': {
-        // Non-standard — handled by the dispatcher (by call). Stub returning to the menu.
+        // Non-standard — handled by the dispatcher (by call). Notify the dispatcher
+        // to call back; best-effort: the client gets the support phone either way (§8).
         const phone =
           this.config.get<string>('SUPPORT_PHONE') ?? '(телефон уточнюється)';
         this.resetSession(ctx, Step.MainMenu);
+        try {
+          await this.orders.requestCallback(client.id);
+        } catch (err) {
+          this.logger.warn(
+            `requestCallback failed for client ${client.id}: ${(err as Error).message}`,
+          );
+        }
         await this.replyMenu(ctx, texts.onboardingToDispatcher(phone));
         return;
       }

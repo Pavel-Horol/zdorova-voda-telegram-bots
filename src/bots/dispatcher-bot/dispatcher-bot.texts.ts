@@ -168,6 +168,16 @@ export function clientCancelledMessage(order: Order, client: Client): string {
   );
 }
 
+/** Notify the dispatcher about a callback request from the "Other" onboarding case. */
+export function callbackRequestMessage(client: Client): string {
+  const name = client.name ?? 'без імені';
+  return (
+    '📞 ЗАПИТ НА ДЗВІНОК (нестандартний випадок)\n' +
+    `Клієнт: ${name} (${client.phone})\n` +
+    'Клієнт обрав «Інше» в онбордингу — передзвоніть для оформлення.'
+  );
+}
+
 /** Current prices (SPEC §7, /prices). */
 export function pricesMessage(prices: PriceSettings): string {
   return (

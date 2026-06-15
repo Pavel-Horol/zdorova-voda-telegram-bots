@@ -62,6 +62,7 @@ describe('OrdersService', () => {
   let dispatcher: {
     notifyNewOrder: jest.Mock;
     notifyClientCancelled: jest.Mock;
+    notifyCallbackRequest: jest.Mock;
   };
   let events: { emit: jest.Mock };
 
@@ -86,6 +87,7 @@ describe('OrdersService', () => {
     dispatcher = {
       notifyNewOrder: jest.fn().mockResolvedValue(undefined),
       notifyClientCancelled: jest.fn().mockResolvedValue(undefined),
+      notifyCallbackRequest: jest.fn().mockResolvedValue(undefined),
     };
     events = { emit: jest.fn() };
 
@@ -185,6 +187,22 @@ describe('OrdersService', () => {
 
       await expect(service.createOrder('c1', 1)).rejects.toThrow();
       expect(prisma.order.create).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('requestCallback', () => {
+    it('notifies the dispatcher with the client, without creating an order', async () => {
+      await service.requestCallback('c1');
+
+      expect(dispatcher.notifyCallbackRequest).toHaveBeenCalledWith(client);
+      expect(prisma.order.create).not.toHaveBeenCalled();
+    });
+
+    it('throws if the client is not found', async () => {
+      clients.getById.mockResolvedValue(null);
+
+      await expect(service.requestCallback('c1')).rejects.toThrow();
+      expect(dispatcher.notifyCallbackRequest).not.toHaveBeenCalled();
     });
   });
 

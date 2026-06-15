@@ -65,7 +65,7 @@ export const texts = {
     '🆕 Стартовий комплект — потрібні бак, помпа та вода\n' +
     '💧 Свої баки — потрібна вода (помпу додамо, якщо немає)\n' +
     '🔁 Я вже ваш клієнт — замовляв(ла) раніше телефоном\n' +
-    '⚙️ Інше — чужа тара, нестандарт',
+    '⚙️ Інше — попросити диспетчера передзвонити',
 
   /** Number of bottles on hand (branches "own bottles" and "already a client"). */
   ownTaraCount:
@@ -91,8 +91,8 @@ export const texts = {
   /** "Other" — non-standard, handled by the dispatcher via a call. */
   onboardingToDispatcher(phone: string): string {
     return (
-      'Цей випадок оформить диспетчер — він зв’яжеться з вами.\n' +
-      `Якщо зручніше — зателефонуйте: ${phone}`
+      'Передали запит диспетчеру — він передзвонить вам найближчим часом 📞\n' +
+      `Якщо зручніше — зателефонуйте самі: ${phone}`
     );
   },
 
