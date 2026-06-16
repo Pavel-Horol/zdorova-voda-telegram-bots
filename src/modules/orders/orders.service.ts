@@ -182,6 +182,9 @@ export class OrdersService {
       client.bottlesOnHand,
       opts,
     );
+    // Snapshot how many bottles are new tara (deposit) at order time — bottlesOnHand
+    // changes on later deliveries, so we cannot recompute it reliably afterwards.
+    const newTara = this.pricing.newTara(bottles, kind, client.bottlesOnHand);
 
     const order = await this.prisma.order.create({
       data: {
@@ -189,6 +192,7 @@ export class OrdersService {
         addressId: address.id,
         bottles,
         kind,
+        newTara,
         electro: opts.electro ?? false,
         pumpAddon: opts.pumpAddon ?? false,
         totalPrice,
@@ -277,16 +281,20 @@ export class OrdersService {
     }
     const prices = await this.pricingSettings.getCurrent();
     const client = await this.clients.getById(order.clientId);
+    const bottlesOnHand = client?.bottlesOnHand ?? 0;
     const totalPrice = this.pricing.calculateTotal(
       bottles,
       order.kind,
       prices,
-      client?.bottlesOnHand ?? 0,
+      bottlesOnHand,
       { electro: order.electro, pumpAddon: order.pumpAddon },
     );
+    // Editing is allowed only before delivery, so bottlesOnHand is still the
+    // pre-delivery value — re-snapshot newTara for the new quantity.
+    const newTara = this.pricing.newTara(bottles, order.kind, bottlesOnHand);
     return this.prisma.order.update({
       where: { id: orderId },
-      data: { bottles, totalPrice },
+      data: { bottles, newTara, totalPrice },
       include: { client: true, address: true },
     });
   }
@@ -328,12 +336,9 @@ export class OrdersService {
    */
   private async creditTara(order: Order): Promise<void> {
     try {
-      const client = await this.clients.getById(order.clientId);
-      const newTara = this.pricing.newTara(
-        order.bottles,
-        order.kind,
-        client?.bottlesOnHand ?? 0,
-      );
+      // Use the snapshot taken at order time — recomputing from the current
+      // bottlesOnHand would drift if other orders were delivered in between.
+      const newTara = order.newTara;
       const data: { bottlesOnHand?: { increment: number }; hasPump?: boolean } =
         {};
       if (newTara > 0) data.bottlesOnHand = { increment: newTara };

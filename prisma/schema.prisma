@@ -74,6 +74,9 @@ model Order {
   bottles      Int
   /// Order kind (PRODUCT.md): determines the total calculation in pricing.service.
   kind         OrderKind
+  /// Bottles of this order that are new tara under deposit — snapshot at creation
+  /// (like totalPrice). Drives the dispatcher breakdown and the tara credit on delivery.
+  newTara      Int         @default(0)
   /// Starter kit with an electric pump (270 instead of 250). STEP3 T5.
   electro      Boolean     @default(false)
   /// OWN_TARA with a pump add-on (+250) if the client has none. STEP3 T5.

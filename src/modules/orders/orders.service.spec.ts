@@ -125,6 +125,7 @@ describe('OrdersService', () => {
           addressId: 'a1',
           bottles: 1,
           kind: 'STARTER_KIT',
+          newTara: 1,
           electro: false,
           pumpAddon: false,
           totalPrice: 750,
@@ -151,6 +152,7 @@ describe('OrdersService', () => {
           addressId: 'a1',
           bottles: 2,
           kind: 'REPEAT',
+          newTara: 0,
           electro: false,
           pumpAddon: false,
           totalPrice: 140,
@@ -173,6 +175,7 @@ describe('OrdersService', () => {
           addressId: 'a1',
           bottles: 2,
           kind: 'OWN_TARA',
+          newTara: 0,
           electro: false,
           pumpAddon: false,
           totalPrice: 140,
@@ -271,6 +274,7 @@ describe('OrdersService', () => {
         clientId: 'c1',
         kind: 'STARTER_KIT',
         bottles: 2,
+        newTara: 2,
         status: 'DELIVERED',
       });
 
@@ -380,7 +384,7 @@ describe('OrdersService', () => {
 
       expect(prisma.order.update).toHaveBeenCalledWith({
         where: { id: 'o1' },
-        data: { bottles: 3, totalPrice: 210 },
+        data: { bottles: 3, newTara: 0, totalPrice: 210 },
         include: { client: true, address: true },
       });
     });
@@ -397,7 +401,7 @@ describe('OrdersService', () => {
 
       expect(prisma.order.update).toHaveBeenCalledWith(
         expect.objectContaining({
-          data: { bottles: 2, totalPrice: 1250 },
+          data: { bottles: 2, newTara: 2, totalPrice: 1250 },
         }),
       );
     });

@@ -92,21 +92,32 @@ export const dispatcherCommands = [
 ];
 
 /**
- * Order line in the dispatcher's usual format — convenient to forward to the
- * driver (SPEC §7). Repeat: "2по75 Address", first: "2бут [ПЕРШИЙ +помпа] Address".
- * Comment — in parentheses, as in the spec example.
+ * What to load and hand over — the composition the dispatcher relays to the driver
+ * (SPEC §7). Uses the snapshot `order.newTara` (bottles under deposit at order time),
+ * so the breakdown stays correct even after delivery changes the client's balance.
+ * - STARTER_KIT: all bottles are new (deposit) + pump type.
+ * - OWN_TARA: client's own bottles (exchange), optional pump add-on.
+ * - REPEAT: exchange count + new-under-deposit count (when topping up tara).
  */
-function driverLine(order: Order, address: Address): string {
-  const pumpMark = order.electro ? '+електро' : '+помпа';
-  const ownPump = order.pumpAddon ? ' +помпа' : '';
-  const qty =
-    order.kind === OrderKind.STARTER_KIT
-      ? `${order.bottles}бут [ПЕРШИЙ ${pumpMark}]`
-      : order.kind === OrderKind.OWN_TARA
-        ? `${order.bottles}по${order.totalPrice / order.bottles} [СВОЯ ТАРА${ownPump}]`
-        : `${order.bottles}по${order.totalPrice / order.bottles}`;
-  const comment = address.comment ? ` (${address.comment})` : '';
-  return `${qty} ${address.raw}${comment}`;
+function composition(order: Order): string {
+  const exchange = order.bottles - order.newTara;
+  switch (order.kind) {
+    case OrderKind.STARTER_KIT: {
+      const pump = order.electro ? 'електрична' : 'звичайна';
+      return (
+        `📦 ${order.bottles} бут. — стартовий комплект (застава за ${order.newTara})\n` +
+        `🔌 помпа: ${pump}`
+      );
+    }
+    case OrderKind.OWN_TARA: {
+      const pump = order.pumpAddon ? '\n🔌 + помпа (докупка)' : '';
+      return `📦 ${order.bottles} бут. — своя тара, обмін${pump}`;
+    }
+    default: // REPEAT
+      return order.newTara > 0
+        ? `📦 ${order.bottles} бут.: ${exchange} обмін + ${order.newTara} нові (застава)`
+        : `📦 ${order.bottles} бут. — обмін`;
+  }
 }
 
 /** Full order message for the dispatcher (SPEC §7). Header — by status. */
@@ -116,7 +127,7 @@ export function orderMessage(
   address: Address,
 ): string {
   const header = STATUS_HEADER[order.status];
-  const firstMark = client.pendingReview
+  const mark = client.pendingReview
     ? '  [ЗВІРИТИ ⚠️ заявлений діючим]'
     : order.kind === OrderKind.STARTER_KIT
       ? '  [ПЕРШЕ ЗАМОВЛЕННЯ ⚠️]'
@@ -124,12 +135,14 @@ export function orderMessage(
         ? '  [СВОЯ ТАРА ⚠️ перевірити бак]'
         : '';
   const name = client.name ?? 'без імені';
+  const comment = address.comment ? ` (${address.comment})` : '';
   return (
-    `${header} #${order.id.slice(0, 8)}${firstMark}\n` +
+    `${header} #${order.id.slice(0, 8)}${mark}\n` +
     `🕒 ${formatDateTime(order.createdAt)}\n` +
-    `${driverLine(order, address)}\n` +
-    `Клієнт: ${name} (${client.phone})\n` +
-    `Сума: ${order.totalPrice} грн`
+    `${composition(order)}\n` +
+    `📍 ${address.raw}${comment}\n` +
+    `👤 ${name} (${client.phone})\n` +
+    `💰 ${order.totalPrice} грн готівкою водієві`
   );
 }
 
