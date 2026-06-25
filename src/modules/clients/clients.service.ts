@@ -97,6 +97,15 @@ export class ClientsService {
     });
   }
 
+  // TEMP self-delete (test only) — remove this method when done.
+  async deleteByTelegramId(telegramId: bigint): Promise<boolean> {
+    const { count } = await this.prisma.client.deleteMany({
+      where: { telegramId },
+    });
+    return count > 0;
+  }
+  // END TEMP
+
   async setDefaultAddress(
     clientId: string,
     input: { raw: string; comment?: string | null },

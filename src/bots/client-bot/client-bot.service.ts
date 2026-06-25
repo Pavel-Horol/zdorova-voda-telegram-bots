@@ -297,6 +297,8 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
 
   private registerHandlers(bot: Bot<BotContext>): void {
     bot.command('start', (ctx) => this.onStart(ctx));
+    // TEMP self-delete (test only) — remove this line and onDeleteMyself below.
+    bot.command('deletemyself', (ctx) => this.onDeleteMyself(ctx));
     bot.on('message:contact', (ctx) => this.onContact(ctx));
     bot.callbackQuery(/^ob:(kit|own|existing|other)$/, (ctx) =>
       this.onOnboardingChoice(ctx),
@@ -332,6 +334,27 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
     }
     await this.showMainMenu(ctx, client.name);
   }
+
+  // TEMP self-delete (test only) — remove this whole method when done.
+  private async onDeleteMyself(ctx: BotContext): Promise<void> {
+    if (!ctx.from) return;
+    try {
+      const deleted = await this.clients.deleteByTelegramId(
+        BigInt(ctx.from.id),
+      );
+      this.resetSession(ctx, Step.AwaitContact);
+      await this.replyMenu(
+        ctx,
+        deleted
+          ? 'Тебя удалено з бази. /start — почати заново.'
+          : 'Тебе немає в базі.',
+        contactKeyboard,
+      );
+    } catch {
+      await ctx.reply('Не вдалося видалити. Спробуй ще раз.');
+    }
+  }
+  // END TEMP
 
   /** Contact received: register the client and show the menu (AWAIT_CONTACT). */
   private async onContact(ctx: BotContext): Promise<void> {
