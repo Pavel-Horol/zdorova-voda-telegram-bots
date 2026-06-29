@@ -180,11 +180,17 @@ export class OrdersService {
       throw new Error(`client ${clientId} has no default address`);
     }
 
-    const kind = await this.deriveKind(client, opts.claimedOnHand);
+    // A self-declared claim is meaningful only when positive; 0/negative means "no
+    // bottles" (STARTER_KIT) and must never flag review or commit a zero balance.
+    const claimedOnHand =
+      opts.claimedOnHand != null && opts.claimedOnHand > 0
+        ? opts.claimedOnHand
+        : undefined;
+    const kind = await this.deriveKind(client, claimedOnHand);
     const prices = await this.pricingSettings.getCurrent();
     // For an OWN_TARA first order the balance is not committed yet (deferred commit) —
     // use the self-declared claim for the tara math; otherwise the client's balance.
-    const bottlesOnHand = opts.claimedOnHand ?? client.bottlesOnHand;
+    const bottlesOnHand = claimedOnHand ?? client.bottlesOnHand;
     const totalPrice = this.pricing.calculateTotal(
       bottles,
       kind,
@@ -206,7 +212,7 @@ export class OrdersService {
         electro: opts.electro ?? false,
         pumpAddon: opts.pumpAddon ?? false,
         // Self-declared balance to verify and commit on acceptance (OWN_TARA only).
-        claimedOnHand: opts.claimedOnHand ?? null,
+        claimedOnHand: claimedOnHand ?? null,
         totalPrice,
         status: OrderStatus.CREATED,
       },
@@ -215,7 +221,7 @@ export class OrdersService {
     // OWN_TARA from a self-declared claim: flag the client for dispatcher review.
     // The flag (not the balance) is the only client write at creation — the balance
     // is committed on acceptance (deferred commit, PRODUCT.md). Cleared by acceptOrder.
-    if (opts.claimedOnHand != null) {
+    if (claimedOnHand != null) {
       await this.clients.setTaraState(clientId, { pendingReview: true });
     }
 
@@ -372,10 +378,21 @@ export class OrdersService {
       hasPump?: boolean;
     } = { pendingReview: false };
     if (order.claimedOnHand != null) {
-      // Verified self-declared balance — commit it now (it was deferred at creation).
-      data.bottlesOnHand = order.claimedOnHand;
-      // The client owns a pump unless they asked us to add one (credited on delivery).
-      if (!order.pumpAddon) data.hasPump = true;
+      // A claim is a TOTAL balance, committed only when there is nothing to overwrite.
+      // The onboarding gate ensures this runs only on a first order (empty balance);
+      // guard it here too so a stale claim can never silently wipe a real balance.
+      const client = await this.clients.getById(order.clientId);
+      if ((client?.bottlesOnHand ?? 0) === 0) {
+        // Verified self-declared balance — commit it now (deferred at creation).
+        data.bottlesOnHand = order.claimedOnHand;
+        // Client owns a pump unless they asked us to add one (credited on delivery).
+        if (!order.pumpAddon) data.hasPump = true;
+      } else {
+        this.logger.warn(
+          `acceptOrder ${id}: skipping claim commit — client ${order.clientId} ` +
+            `already has bottlesOnHand=${client?.bottlesOnHand}`,
+        );
+      }
     }
     await this.clients.setTaraState(order.clientId, data);
     this.emitStatusChanged(order);

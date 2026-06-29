@@ -517,6 +517,14 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
     const client = await this.requireClient(ctx);
     if (!client) return;
 
+    // A first OWN_TARA order is awaiting review: its declared balance is not committed
+    // yet (deferred commit), so a new order would misprice the tara. Block until the
+    // dispatcher accepts (which commits the balance and clears pendingReview).
+    if (client.pendingReview) {
+      await this.replyMenu(ctx, texts.awaitingFirstOrderReview);
+      return;
+    }
+
     ctx.session.bottles = undefined;
     ctx.session.history = [Step.MainMenu];
 

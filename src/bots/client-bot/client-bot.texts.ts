@@ -102,6 +102,11 @@ export const texts = {
     );
   },
 
+  /** First order with own bottles is still awaiting the dispatcher's confirmation. */
+  awaitingFirstOrderReview:
+    'Ваше перше замовлення ще на підтвердженні в диспетчера ⏳\n' +
+    'Щойно його підтвердять — ви зможете оформити наступне.',
+
   /** Label of the "Repeat last order" button (SPEC §6) with plural form. */
   repeatButton(n: number): string {
     return `🔄 Повторити: ${n} ${bottlesWord(n)}`;

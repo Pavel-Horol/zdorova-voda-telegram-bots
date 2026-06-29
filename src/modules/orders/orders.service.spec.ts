@@ -302,6 +302,8 @@ describe('OrdersService', () => {
     });
 
     it('acceptOrder with a self-declared claim commits the balance + pump and clears pendingReview', async () => {
+      // A claim is committed only on a first order (empty balance, see deferred commit).
+      clients.getById.mockResolvedValue({ ...client, bottlesOnHand: 0 });
       prisma.order.findUniqueOrThrow.mockResolvedValue({
         id: 'o1',
         status: 'CREATED',
@@ -325,6 +327,7 @@ describe('OrdersService', () => {
     });
 
     it('acceptOrder with a claim + pump add-on commits the balance but defers hasPump to delivery', async () => {
+      clients.getById.mockResolvedValue({ ...client, bottlesOnHand: 0 });
       prisma.order.findUniqueOrThrow.mockResolvedValue({
         id: 'o1',
         status: 'CREATED',
@@ -343,6 +346,29 @@ describe('OrdersService', () => {
       expect(clients.setTaraState).toHaveBeenCalledWith('c1', {
         pendingReview: false,
         bottlesOnHand: 4,
+      });
+    });
+
+    it('acceptOrder does NOT overwrite a non-empty balance with a stale claim (guard)', async () => {
+      // Defensive: claim commit must never wipe a real balance (default client = 5).
+      clients.getById.mockResolvedValue({ ...client, bottlesOnHand: 5 });
+      prisma.order.findUniqueOrThrow.mockResolvedValue({
+        id: 'o1',
+        status: 'CREATED',
+      });
+      prisma.order.update.mockResolvedValue({
+        id: 'o1',
+        clientId: 'c1',
+        status: 'ACCEPTED',
+        claimedOnHand: 4,
+        pumpAddon: false,
+      });
+
+      await service.acceptOrder('o1');
+
+      // Only pendingReview is cleared — the balance is left untouched.
+      expect(clients.setTaraState).toHaveBeenCalledWith('c1', {
+        pendingReview: false,
       });
     });
 
