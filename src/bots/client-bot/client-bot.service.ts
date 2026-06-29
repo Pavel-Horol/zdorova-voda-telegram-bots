@@ -69,11 +69,12 @@ interface SessionData {
    */
   history: Step[];
   /**
-   * Onboarding "🔁 I am already your client": entering the bottle count goes
-   * through the same step as "own bottles", but marks the client `pendingReview`
-   * (the dispatcher will verify).
+   * Onboarding "I already have bottles": the self-declared number of bottles on hand
+   * (own or another brand's — we re-label them as ours). Carried until the order is
+   * created; committed to the client only on dispatcher acceptance (deferred commit).
+   * Its presence (>0) makes the first order an OWN_TARA order.
    */
-  existingClient?: boolean;
+  claimedOnHand?: number;
   /** Electric pump in the starter kit (T5). */
   electro?: boolean;
   /** Pump add-on for own bottles (T5, answer "no pump"). */
@@ -193,13 +194,11 @@ function buildEditMenuKeyboard(showPump: boolean): InlineKeyboard {
   return kb;
 }
 
-/** New-client onboarding: "what do you already have" (STEP3 T3). */
+/** New-client onboarding: "what do you already have" (PRODUCT.md). */
 const onboardingKeyboard = new InlineKeyboard()
   .text('🆕 Стартовий комплект', 'ob:kit')
   .row()
-  .text('💧 Свої баки', 'ob:own')
-  .row()
-  .text('🔁 Я вже ваш клієнт', 'ob:existing')
+  .text('💧 У мене вже є баки (19 л)', 'ob:own')
   .row()
   .text('⚙️ Інше', 'ob:other')
   .row()
@@ -300,7 +299,7 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
     // TEMP self-delete (test only) — remove this line and onDeleteMyself below.
     bot.command('deletemyself', (ctx) => this.onDeleteMyself(ctx));
     bot.on('message:contact', (ctx) => this.onContact(ctx));
-    bot.callbackQuery(/^ob:(kit|own|existing|other)$/, (ctx) =>
+    bot.callbackQuery(/^ob:(kit|own|other)$/, (ctx) =>
       this.onOnboardingChoice(ctx),
     );
     bot.callbackQuery(/^pump:(std|electro)$/, (ctx) => this.onPumpChoice(ctx));
@@ -542,10 +541,10 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * Choice on the onboarding screen (STEP3 T3). kit → the regular first-order flow;
-   * own → own-bottles count input; existing/other → to the dispatcher for now (T4).
-   * The order kind is derived from the client's state (own bottles → OWN_TARA), so
-   * it is not carried in the session.
+   * Choice on the onboarding screen (PRODUCT.md). kit → the starter-kit flow;
+   * own → own-bottles count input (OWN_TARA, whether the bottles are ours or another
+   * brand's — we re-label them); other → dispatcher callback. The order kind is derived
+   * from the declared count (claimedOnHand), so it is not separately flagged here.
    */
   private async onOnboardingChoice(ctx: BotContext): Promise<void> {
     await ctx.answerCallbackQuery();
@@ -557,17 +556,12 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
 
     ctx.session.bottles = undefined;
     ctx.session.history = [Step.MainMenu];
-    ctx.session.existingClient = false;
+    ctx.session.claimedOnHand = undefined;
     switch (choice) {
       case 'kit':
         await this.renderPumpChoice(ctx);
         return;
       case 'own':
-        await this.renderOwnTaraCount(ctx);
-        return;
-      case 'existing':
-        // Claimed as existing: same bottle-count input, but flagged for dispatcher review.
-        ctx.session.existingClient = true;
         await this.renderOwnTaraCount(ctx);
         return;
       case 'other': {
@@ -590,9 +584,10 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * Own-bottles count input (OWN_TARA, step OwnTaraCount). The bottles declared by
-   * the client become the starting balance (the pump is their own); then the usual
-   * address collection. The OWN_TARA order kind is derived from bottlesOnHand>0 at calc time.
+   * Own-bottles count input (OWN_TARA, step OwnTaraCount). The declared count is kept
+   * in the session (NOT written to the client yet — deferred commit) and makes the
+   * order OWN_TARA; it is committed to the client's balance only when the dispatcher
+   * accepts the order. Then we always ask about the pump (we no longer assume one).
    */
   private async onOwnTaraCountInput(
     ctx: BotContext,
@@ -605,18 +600,8 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
       await ctx.reply(texts.ownTaraInvalid);
       return;
     }
-    await this.clients.setTaraState(client.id, {
-      bottlesOnHand: count,
-      hasPump: true,
-      // "I am already your client" → flag for dispatcher review (cleared on order accept).
-      pendingReview: ctx.session.existingClient === true,
-    });
-    if (ctx.session.existingClient === true) {
-      // Existing client — the pump is ours, no need to ask.
-      await this.renderAddressPrompt(ctx);
-    } else {
-      await this.renderOwnPumpAsk(ctx);
-    }
+    ctx.session.claimedOnHand = count;
+    await this.renderOwnPumpAsk(ctx);
   }
 
   /** Pump choice in the starter kit (T5): standard / electric. */
@@ -746,10 +731,12 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
       await this.showMainMenu(ctx, client.name);
       return;
     }
-    // Pump options — before resetSession (it clears them).
+    // Order options — read before resetSession (it clears them). claimedOnHand makes
+    // a first order OWN_TARA and is committed to the client only on dispatcher accept.
     const pumpOpts = {
       electro: ctx.session.electro,
       pumpAddon: ctx.session.pumpAddon,
+      claimedOnHand: ctx.session.claimedOnHand,
     };
     // Leave Confirm BEFORE creating the order — a repeat tap won't create a dupe.
     this.resetSession(ctx, Step.MainMenu);
@@ -1003,6 +990,7 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
     const quote = await this.orders.quote(clientId, intent.bottles, {
       electro: ctx.session.electro,
       pumpAddon: ctx.session.pumpAddon,
+      claimedOnHand: ctx.session.claimedOnHand,
     });
     // Reaching Confirm ends any single-field edit (covers the edit-quantity path too).
     ctx.session.editing = false;
@@ -1065,7 +1053,7 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
     ctx.session.step = step;
     ctx.session.bottles = undefined;
     ctx.session.addressRaw = undefined;
-    ctx.session.existingClient = undefined;
+    ctx.session.claimedOnHand = undefined;
     ctx.session.electro = undefined;
     ctx.session.pumpAddon = undefined;
     ctx.session.editing = undefined;

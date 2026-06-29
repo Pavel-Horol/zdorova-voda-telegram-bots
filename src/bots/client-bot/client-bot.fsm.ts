@@ -18,8 +18,14 @@ export enum Step {
   EditMenu = 'EDIT_MENU',
 }
 
-/** Choice on the new-client onboarding screen (PRODUCT.md, STEP3 T3). */
-export type OnboardingChoice = 'kit' | 'own' | 'existing' | 'other';
+/**
+ * Choice on the new-client onboarding screen (PRODUCT.md). Two real states only:
+ * `kit` (nothing yet → starter kit) and `own` (already has bottles — own or another
+ * brand's, which we re-label as ours: identical pricing, deposit 0). `other` →
+ * dispatcher callback. The former separate "I am already your client" branch was
+ * merged into `own` (same OWN_TARA flow; verification handled on the order).
+ */
+export type OnboardingChoice = 'kit' | 'own' | 'other';
 
 /**
  * Parses the onboarding choice from `callback_data` (`ob:<choice>`). Input is
@@ -29,7 +35,6 @@ export function parseOnboardingChoice(raw: string): OnboardingChoice | null {
   switch (raw) {
     case 'kit':
     case 'own':
-    case 'existing':
     case 'other':
       return raw;
     default:

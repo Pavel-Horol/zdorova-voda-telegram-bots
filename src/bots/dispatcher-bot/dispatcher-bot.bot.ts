@@ -29,6 +29,8 @@ export interface DispatcherSession {
   editingPriceField?: EditablePriceField;
   /** id of the order we are awaiting a new bottle quantity for (✏️ Edit flow). */
   editingOrderId?: string;
+  /** id of the OWN_TARA order we are awaiting a corrected declared balance for (step B). */
+  editingClaimOrderId?: string;
 }
 
 export type DispatcherContext = Context & SessionFlavor<DispatcherSession>;

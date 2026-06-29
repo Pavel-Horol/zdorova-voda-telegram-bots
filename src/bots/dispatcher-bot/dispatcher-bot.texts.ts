@@ -71,6 +71,14 @@ export function editQuantityPrompt(orderId: string): string {
   return `✏️ Замовлення #${orderId.slice(0, 8)}: введіть нову кількість бутлів.`;
 }
 
+/** Prompt for the corrected declared bottle balance of an OWN_TARA order (step B). */
+export function editClaimPrompt(orderId: string): string {
+  return (
+    `🔢 Замовлення #${orderId.slice(0, 8)}: введіть реальну кількість баків клієнта ` +
+    'на руках (зарахується при прийнятті, на суму цього замовлення не впливає).'
+  );
+}
+
 /** Command reference (/help). */
 export const dispatcherHelp =
   'Що вміє бот:\n' +
@@ -127,12 +135,13 @@ export function orderMessage(
   address: Address,
 ): string {
   const header = STATUS_HEADER[order.status];
-  const mark = client.pendingReview
-    ? '  [ЗВІРИТИ ⚠️ заявлений діючим]'
-    : order.kind === OrderKind.STARTER_KIT
-      ? '  [ПЕРШЕ ЗАМОВЛЕННЯ ⚠️]'
-      : order.kind === OrderKind.OWN_TARA
-        ? '  [СВОЯ ТАРА ⚠️ перевірити бак]'
+  // One mark per order kind. OWN_TARA = self-declared bottles to verify physically
+  // (own or another brand's, re-labelled as ours) — show the declared count.
+  const mark =
+    order.kind === OrderKind.OWN_TARA
+      ? `  [СВОЯ ТАРА ⚠️ звірити ${order.claimedOnHand ?? order.bottles} баків]`
+      : order.kind === OrderKind.STARTER_KIT
+        ? '  [ПЕРШЕ ЗАМОВЛЕННЯ ⚠️]'
         : '';
   const name = client.name ?? 'без імені';
   const comment = address.comment ? ` (${address.comment})` : '';
@@ -153,14 +162,22 @@ export function orderMessage(
 export function orderKeyboard(
   orderId: string,
   status: OrderStatus,
+  kind?: OrderKind,
 ): InlineKeyboard | undefined {
   switch (status) {
-    case OrderStatus.CREATED:
-      return new InlineKeyboard()
+    case OrderStatus.CREATED: {
+      const kb = new InlineKeyboard()
         .text('✅ Прийнято', `acc:${orderId}`)
         .text('❌ Скасувати', `can:${orderId}`)
         .row()
         .text('✏️ Змінити', `edit:${orderId}`);
+      // OWN_TARA before acceptance: let the dispatcher correct the self-declared
+      // bottle balance (step B) — it is committed to the client on accept.
+      if (kind === OrderKind.OWN_TARA) {
+        kb.row().text('🔢 Звірити баки', `claim:${orderId}`);
+      }
+      return kb;
+    }
     case OrderStatus.ACCEPTED:
       return new InlineKeyboard()
         .text('🚚 Доставлено', `del:${orderId}`)

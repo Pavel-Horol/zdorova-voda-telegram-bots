@@ -57,6 +57,22 @@ describe('routeDispatcherText', () => {
     });
   });
 
+  it('only claim editing is active → edit-claim (step B)', () => {
+    expect(routeDispatcherText('3', { editingClaimOrderId: 'o7' })).toEqual({
+      kind: 'edit-claim',
+      orderId: 'o7',
+    });
+  });
+
+  it('claim editing has priority over price editing (mutually exclusive modes)', () => {
+    expect(
+      routeDispatcherText('3', {
+        editingClaimOrderId: 'o7',
+        editingPriceField: 'price1',
+      }),
+    ).toEqual({ kind: 'edit-claim', orderId: 'o7' });
+  });
+
   it('only price editing is active → edit-price', () => {
     expect(
       routeDispatcherText('30', { editingPriceField: 'pumpPrice' }),

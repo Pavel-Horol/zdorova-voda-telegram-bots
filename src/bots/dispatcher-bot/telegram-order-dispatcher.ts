@@ -43,7 +43,7 @@ export class TelegramOrderDispatcher implements OrderDispatcher {
     await this.broadcast(
       orderMessage(order, client, address),
       `order ${order.id}`,
-      orderKeyboard(order.id, order.status),
+      orderKeyboard(order.id, order.status, order.kind),
     );
   }
 

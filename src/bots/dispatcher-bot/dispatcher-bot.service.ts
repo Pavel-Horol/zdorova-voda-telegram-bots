@@ -27,6 +27,7 @@ import {
   dispatcherCommands,
   dispatcherHelp,
   dispatcherWelcome,
+  editClaimPrompt,
   editQuantityPrompt,
   noActiveOrders,
   orderKeyboard,
@@ -130,6 +131,7 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
     bot.callbackQuery(/^del:(.+)$/, (ctx) => this.onTransition(ctx, 'deliver'));
     bot.callbackQuery(/^can:(.+)$/, (ctx) => this.onTransition(ctx, 'cancel'));
     bot.callbackQuery(/^edit:(.+)$/, (ctx) => this.onEditOrder(ctx));
+    bot.callbackQuery(/^claim:(.+)$/, (ctx) => this.onEditClaim(ctx));
     bot.callbackQuery('pe_cancel', (ctx) => this.onCancelPriceEdit(ctx));
     bot.callbackQuery(
       /^pe:(price1|priceFrom2|priceFrom6|depositPerBottle|pumpPrice|electroPumpPrice|waterStartPrice)$/,
@@ -174,7 +176,7 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
     const view = await this.orders.getOrderView(id);
     if (!view) return;
     await ctx.editMessageText(orderMessage(view, view.client, view.address), {
-      reply_markup: orderKeyboard(view.id, view.status),
+      reply_markup: orderKeyboard(view.id, view.status, view.kind),
     });
   }
 
@@ -204,7 +206,7 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
     await ctx.reply(activeOrdersHeader(orders.length));
     for (const order of orders) {
       await ctx.reply(orderMessage(order, order.client, order.address), {
-        reply_markup: orderKeyboard(order.id, order.status),
+        reply_markup: orderKeyboard(order.id, order.status, order.kind),
       });
     }
   }
@@ -215,6 +217,7 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
     // (otherwise the next number would go into the previous field/order).
     ctx.session.editingPriceField = undefined;
     ctx.session.editingOrderId = undefined;
+    ctx.session.editingClaimOrderId = undefined;
     const prices = await this.pricingSettings.getCurrent();
     await ctx.reply(pricesMessage(prices), { reply_markup: pricesKeyboard() });
   }
@@ -225,6 +228,7 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
     const field = ctx.match?.[1] as EditablePriceField | undefined;
     if (!field) return;
     ctx.session.editingOrderId = undefined; // input modes are mutually exclusive
+    ctx.session.editingClaimOrderId = undefined;
     ctx.session.editingPriceField = field;
     await ctx.reply(
       `Введіть нове значення для «${priceFieldLabel(field)}» (ціле число грн):`,
@@ -247,8 +251,24 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
     const id = ctx.match?.[1];
     if (!id) return;
     ctx.session.editingPriceField = undefined; // input modes are mutually exclusive
+    ctx.session.editingClaimOrderId = undefined;
     ctx.session.editingOrderId = id;
     await ctx.reply(editQuantityPrompt(id));
+  }
+
+  /**
+   * "🔢 Звірити баки" on an OWN_TARA order: remember the order and wait for the
+   * corrected declared balance as text (step B). Only this order's `claimedOnHand`
+   * is changed — see {@link OrdersService.editClaimedOnHand}.
+   */
+  private async onEditClaim(ctx: DispatcherContext): Promise<void> {
+    await ctx.answerCallbackQuery();
+    const id = ctx.match?.[1];
+    if (!id) return;
+    ctx.session.editingPriceField = undefined; // input modes are mutually exclusive
+    ctx.session.editingOrderId = undefined;
+    ctx.session.editingClaimOrderId = id;
+    await ctx.reply(editClaimPrompt(id));
   }
 
   /**
@@ -269,6 +289,10 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
       case 'edit-quantity':
         // New quantity input for an order (✏️ Edit) — priority over price.
         await this.applyEditedQuantity(ctx, intent.orderId, text);
+        return;
+      case 'edit-claim':
+        // Corrected declared balance for an OWN_TARA order (🔢 step B).
+        await this.applyEditedClaim(ctx, intent.orderId, text);
         return;
       case 'edit-price': {
         const parsed = parsePriceValue(text);
@@ -316,7 +340,39 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
     ctx.session.editingOrderId = undefined;
     await ctx.reply(
       `Змінено ✅\n\n${orderMessage(view, view.client, view.address)}`,
-      { reply_markup: orderKeyboard(view.id, view.status) },
+      { reply_markup: orderKeyboard(view.id, view.status, view.kind) },
+    );
+  }
+
+  /**
+   * Parses the corrected declared balance and applies it to an OWN_TARA order (step B);
+   * on a parse error — wait for another number. Bounds match the client-side tara cap.
+   */
+  private async applyEditedClaim(
+    ctx: DispatcherContext,
+    orderId: string,
+    text: string,
+  ): Promise<void> {
+    const parsed = parseEditedQuantity(text, MAX_EDIT_QTY);
+    if (!parsed.ok) {
+      await ctx.reply(
+        `Потрібне ціле число від 1 до ${MAX_EDIT_QTY}. Спробуйте ще раз.`,
+      );
+      return;
+    }
+    let view: OrderWithRelations;
+    try {
+      view = await this.orders.editClaimedOnHand(orderId, parsed.value);
+    } catch {
+      // No longer CREATED / not an OWN_TARA claim / deleted — correction unavailable.
+      ctx.session.editingClaimOrderId = undefined;
+      await ctx.reply('Цей баланс уже не можна змінити.');
+      return;
+    }
+    ctx.session.editingClaimOrderId = undefined;
+    await ctx.reply(
+      `Звірено ✅\n\n${orderMessage(view, view.client, view.address)}`,
+      { reply_markup: orderKeyboard(view.id, view.status, view.kind) },
     );
   }
 

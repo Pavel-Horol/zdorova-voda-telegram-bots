@@ -143,8 +143,11 @@ describe('parseOnboardingChoice', () => {
   it('valid variants → themselves', () => {
     expect(parseOnboardingChoice('kit')).toBe('kit');
     expect(parseOnboardingChoice('own')).toBe('own');
-    expect(parseOnboardingChoice('existing')).toBe('existing');
     expect(parseOnboardingChoice('other')).toBe('other');
+  });
+
+  it('the merged-away "existing" variant is no longer accepted', () => {
+    expect(parseOnboardingChoice('existing')).toBeNull();
   });
 
   it('foreign/forged variant → null', () => {

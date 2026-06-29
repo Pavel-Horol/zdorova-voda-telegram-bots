@@ -15,20 +15,24 @@ export const BTN_STATS = '📊 Статистика';
 export type DispatcherTextIntent =
   | { kind: 'menu'; action: 'orders' | 'prices' | 'stats' }
   | { kind: 'edit-quantity'; orderId: string }
+  | { kind: 'edit-claim'; orderId: string }
   | { kind: 'edit-price'; field: EditablePriceField }
   | { kind: 'ignore' };
 
-/** Active text input mode (part of the dispatcher session). */
+/** Active text input mode (part of the dispatcher session). Modes are exclusive. */
 export interface DispatcherInputState {
   editingOrderId?: string;
+  /** Correcting the self-declared bottle balance of an OWN_TARA order (step B). */
+  editingClaimOrderId?: string;
   editingPriceField?: EditablePriceField;
 }
 
 /**
  * Decides what the text sent by the dispatcher means (SPEC §7). The branching
  * order is preserved exactly: menu buttons take priority (so "💰 Ціни" is not sent
- * as a price value), then quantity editing wins over price editing (the modes are
- * mutually exclusive). If neither a button nor an active mode — the text is ignored.
+ * as a price value), then the order-editing modes (quantity / claim correction) win
+ * over price editing. The modes are mutually exclusive (handlers clear the others on
+ * entry). If neither a button nor an active mode — the text is ignored.
  */
 export function routeDispatcherText(
   text: string,
@@ -46,6 +50,9 @@ export function routeDispatcherText(
   }
   if (state.editingOrderId) {
     return { kind: 'edit-quantity', orderId: state.editingOrderId };
+  }
+  if (state.editingClaimOrderId) {
+    return { kind: 'edit-claim', orderId: state.editingClaimOrderId };
   }
   if (state.editingPriceField) {
     return { kind: 'edit-price', field: state.editingPriceField };

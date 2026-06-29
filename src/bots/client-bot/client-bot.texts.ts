@@ -62,15 +62,14 @@ export const texts = {
   /** EDIT_MENU — "what to change" before going back to the confirmation (✏️ Змінити). */
   editMenu: 'Що змінити в замовленні?',
 
-  /** ONBOARDING — choice screen for a new client (STEP3 T3). */
+  /** ONBOARDING — choice screen for a new client (PRODUCT.md). */
   onboarding:
     'Щоб порахувати правильно — що у вас уже є?\n\n' +
     '🆕 Стартовий комплект — потрібні бак, помпа та вода\n' +
-    '💧 Свої баки — потрібна вода (помпу додамо, якщо немає)\n' +
-    '🔁 Я вже ваш клієнт — замовляв(ла) раніше телефоном\n' +
+    '💧 У мене вже є баки (19 л) — і свої, і ваші; залог не платите\n' +
     '⚙️ Інше — попросити диспетчера передзвонити',
 
-  /** Number of bottles on hand (branches "own bottles" and "already a client"). */
+  /** Number of bottles on hand (the "I already have bottles" branch → OWN_TARA). */
   ownTaraCount:
     'Скільки у вас баків (19 л) на руках? Надішліть числом — на стільки порахуємо обмін.',
 

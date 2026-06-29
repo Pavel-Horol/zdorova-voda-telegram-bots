@@ -48,6 +48,13 @@ export interface OrderQuote {
 export interface PumpOptions {
   electro?: boolean;
   pumpAddon?: boolean;
+  /**
+   * Bottles self-declared at onboarding ("I already have bottles"). When set (>0) on
+   * a first order, the order is OWN_TARA and the balance is committed to the client
+   * only on dispatcher acceptance (deferred commit — PRODUCT.md). The client record
+   * is NOT touched at order creation.
+   */
+  claimedOnHand?: number;
 }
 
 /**
@@ -173,18 +180,21 @@ export class OrdersService {
       throw new Error(`client ${clientId} has no default address`);
     }
 
-    const kind = await this.deriveKind(client);
+    const kind = await this.deriveKind(client, opts.claimedOnHand);
     const prices = await this.pricingSettings.getCurrent();
+    // For an OWN_TARA first order the balance is not committed yet (deferred commit) —
+    // use the self-declared claim for the tara math; otherwise the client's balance.
+    const bottlesOnHand = opts.claimedOnHand ?? client.bottlesOnHand;
     const totalPrice = this.pricing.calculateTotal(
       bottles,
       kind,
       prices,
-      client.bottlesOnHand,
+      bottlesOnHand,
       opts,
     );
     // Snapshot how many bottles are new tara (deposit) at order time — bottlesOnHand
     // changes on later deliveries, so we cannot recompute it reliably afterwards.
-    const newTara = this.pricing.newTara(bottles, kind, client.bottlesOnHand);
+    const newTara = this.pricing.newTara(bottles, kind, bottlesOnHand);
 
     const order = await this.prisma.order.create({
       data: {
@@ -195,10 +205,19 @@ export class OrdersService {
         newTara,
         electro: opts.electro ?? false,
         pumpAddon: opts.pumpAddon ?? false,
+        // Self-declared balance to verify and commit on acceptance (OWN_TARA only).
+        claimedOnHand: opts.claimedOnHand ?? null,
         totalPrice,
         status: OrderStatus.CREATED,
       },
     });
+
+    // OWN_TARA from a self-declared claim: flag the client for dispatcher review.
+    // The flag (not the balance) is the only client write at creation — the balance
+    // is committed on acceptance (deferred commit, PRODUCT.md). Cleared by acceptOrder.
+    if (opts.claimedOnHand != null) {
+      await this.clients.setTaraState(clientId, { pendingReview: true });
+    }
 
     await this.dispatcher.notifyNewOrder(order, client, address);
 
@@ -230,8 +249,12 @@ export class OrdersService {
     opts: PumpOptions = {},
   ): Promise<OrderQuote> {
     const client = await this.clients.getById(clientId);
-    const bottlesOnHand = client?.bottlesOnHand ?? 0;
-    const kind = client ? await this.deriveKind(client) : OrderKind.STARTER_KIT;
+    const kind = client
+      ? await this.deriveKind(client, opts.claimedOnHand)
+      : OrderKind.STARTER_KIT;
+    // Mirror createOrder: an OWN_TARA claim is not committed yet, so quote off the
+    // self-declared count; otherwise off the client's balance.
+    const bottlesOnHand = opts.claimedOnHand ?? client?.bottlesOnHand ?? 0;
     const prices = await this.pricingSettings.getCurrent();
     const totalPrice = this.pricing.calculateTotal(
       bottles,
@@ -300,8 +323,41 @@ export class OrdersService {
   }
 
   /**
-   * CREATED → ACCEPTED. Accepting an order from a self-claimed existing client
-   * (`pendingReview`) = the dispatcher verifying them → clear the flag (STEP3 T4).
+   * Dispatcher correction of the self-declared bottle balance on a flagged OWN_TARA
+   * order BEFORE acceptance (step B). The OWN_TARA total is independent of the count
+   * (water by grid + optional pump, deposit 0), so `totalPrice`/`newTara` are NOT
+   * recomputed — only the claim is fixed. Its purpose is the balance committed to the
+   * client on accept: an inflated claim would otherwise leak into future REPEAT
+   * tara-top-up math. Allowed only while CREATED (the balance is not committed yet)
+   * and only for an OWN_TARA order carrying a claim.
+   */
+  async editClaimedOnHand(
+    orderId: string,
+    claimedOnHand: number,
+  ): Promise<OrderWithRelations> {
+    const order = await this.prisma.order.findUniqueOrThrow({
+      where: { id: orderId },
+    });
+    if (order.status !== OrderStatus.CREATED) {
+      throw new Error(
+        `cannot edit the claim of order ${orderId} in status ${order.status}`,
+      );
+    }
+    if (order.kind !== OrderKind.OWN_TARA || order.claimedOnHand == null) {
+      throw new Error(`order ${orderId} has no self-declared balance to edit`);
+    }
+    return this.prisma.order.update({
+      where: { id: orderId },
+      data: { claimedOnHand },
+      include: { client: true, address: true },
+    });
+  }
+
+  /**
+   * CREATED → ACCEPTED. Acceptance IS the verification of a self-declared OWN_TARA
+   * claim: commit the claimed balance to the client and clear `pendingReview`
+   * (deferred commit — PRODUCT.md). A pump the client already owns (OWN_TARA without
+   * an add-on) is recorded here too; an add-on pump is credited on delivery instead.
    */
   async acceptOrder(id: string): Promise<Order> {
     const order = await this.transition(
@@ -310,7 +366,18 @@ export class OrdersService {
       OrderStatus.ACCEPTED,
       { acceptedAt: new Date() },
     );
-    await this.clients.setTaraState(order.clientId, { pendingReview: false });
+    const data: {
+      pendingReview: boolean;
+      bottlesOnHand?: number;
+      hasPump?: boolean;
+    } = { pendingReview: false };
+    if (order.claimedOnHand != null) {
+      // Verified self-declared balance — commit it now (it was deferred at creation).
+      data.bottlesOnHand = order.claimedOnHand;
+      // The client owns a pump unless they asked us to add one (credited on delivery).
+      if (!order.pumpAddon) data.hasPump = true;
+    }
+    await this.clients.setTaraState(order.clientId, data);
     this.emitStatusChanged(order);
     return order;
   }
@@ -342,8 +409,11 @@ export class OrdersService {
       const data: { bottlesOnHand?: { increment: number }; hasPump?: boolean } =
         {};
       if (newTara > 0) data.bottlesOnHand = { increment: newTara };
-      // The starter kit includes a pump — record it for the client on delivery.
-      if (order.kind === OrderKind.STARTER_KIT) data.hasPump = true;
+      // The starter kit includes a pump, and an OWN_TARA add-on pump is delivered now —
+      // record the pump for the client on delivery in both cases.
+      if (order.kind === OrderKind.STARTER_KIT || order.pumpAddon) {
+        data.hasPump = true;
+      }
       if (Object.keys(data).length === 0) return;
       await this.prisma.client.update({
         where: { id: order.clientId },
@@ -434,12 +504,17 @@ export class OrdersService {
 
   /**
    * Order kind by the client's state: has past orders → REPEAT; a first order with
-   * own bottles (`bottlesOnHand>0`, set by OWN_TARA onboarding) → OWN_TARA; otherwise
-   * → STARTER_KIT. This way the onboarding need not be carried into the session.
+   * own bottles → OWN_TARA; otherwise → STARTER_KIT. "Own bottles" on a first order
+   * is the self-declared `claimedOnHand` from onboarding (not yet committed to the
+   * client, deferred commit) — with a fallback to a committed `bottlesOnHand` for a
+   * client whose balance is already known.
    */
-  private async deriveKind(client: Client): Promise<OrderKind> {
+  private async deriveKind(
+    client: Client,
+    claimedOnHand?: number,
+  ): Promise<OrderKind> {
     if (!(await this.isFirstOrder(client.id))) return OrderKind.REPEAT;
-    return client.bottlesOnHand > 0
+    return (claimedOnHand ?? 0) > 0 || client.bottlesOnHand > 0
       ? OrderKind.OWN_TARA
       : OrderKind.STARTER_KIT;
   }

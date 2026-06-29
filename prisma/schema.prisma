@@ -81,6 +81,12 @@ model Order {
   electro      Boolean     @default(false)
   /// OWN_TARA with a pump add-on (+250) if the client has none. STEP3 T5.
   pumpAddon    Boolean     @default(false)
+  /// Bottles the client SELF-DECLARED having on hand at onboarding ("I already have
+  /// bottles"). Set only on a first OWN_TARA order; null otherwise. The claim is NOT
+  /// committed to Client.bottlesOnHand until the dispatcher accepts the order
+  /// (deferred commit / verification — PRODUCT.md). Also drives the dispatcher "verify
+  /// N bottles" mark.
+  claimedOnHand Int?
   /// Frozen order total in UAH (integer, no kopecks).
   totalPrice   Int
   status       OrderStatus @default(CREATED)

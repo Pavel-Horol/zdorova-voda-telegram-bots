@@ -128,6 +128,7 @@ describe('OrdersService', () => {
           newTara: 1,
           electro: false,
           pumpAddon: false,
+          claimedOnHand: null,
           totalPrice: 750,
           status: 'CREATED',
         },
@@ -155,6 +156,7 @@ describe('OrdersService', () => {
           newTara: 0,
           electro: false,
           pumpAddon: false,
+          claimedOnHand: null,
           totalPrice: 140,
           status: 'CREATED',
         },
@@ -178,10 +180,45 @@ describe('OrdersService', () => {
           newTara: 0,
           electro: false,
           pumpAddon: false,
+          claimedOnHand: null,
           totalPrice: 140,
           status: 'CREATED',
         },
       });
+    });
+
+    it('first order with a self-declared claim (deferred commit) → OWN_TARA, stores claimedOnHand, flags pendingReview but does NOT commit the balance', async () => {
+      // Fresh client (balance 0): the claim, not the committed balance, drives OWN_TARA.
+      const freshClient = { ...client, bottlesOnHand: 0, hasPump: false };
+      clients.getById.mockResolvedValue(freshClient);
+      const created = { id: 'o4', kind: 'OWN_TARA', totalPrice: 140 };
+      prisma.order.count.mockResolvedValue(0); // first order
+      prisma.order.create.mockResolvedValue(created);
+
+      await service.createOrder('c1', 2, { claimedOnHand: 3 });
+
+      expect(prisma.order.create).toHaveBeenCalledWith({
+        data: {
+          clientId: 'c1',
+          addressId: 'a1',
+          bottles: 2,
+          kind: 'OWN_TARA',
+          newTara: 0,
+          electro: false,
+          pumpAddon: false,
+          claimedOnHand: 3,
+          totalPrice: 140,
+          status: 'CREATED',
+        },
+      });
+      // Only the review flag is written at creation — the balance is committed on accept.
+      expect(clients.setTaraState).toHaveBeenCalledWith('c1', {
+        pendingReview: true,
+      });
+      expect(clients.setTaraState).not.toHaveBeenCalledWith(
+        'c1',
+        expect.objectContaining({ bottlesOnHand: expect.anything() as number }),
+      );
     });
 
     it('throws if the client has no default address, and the order is not created', async () => {
@@ -264,6 +301,51 @@ describe('OrdersService', () => {
       });
     });
 
+    it('acceptOrder with a self-declared claim commits the balance + pump and clears pendingReview', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue({
+        id: 'o1',
+        status: 'CREATED',
+      });
+      prisma.order.update.mockResolvedValue({
+        id: 'o1',
+        clientId: 'c1',
+        status: 'ACCEPTED',
+        claimedOnHand: 4,
+        pumpAddon: false,
+      });
+
+      await service.acceptOrder('o1');
+
+      // Verification = acceptance: the deferred balance is committed and the pump owned.
+      expect(clients.setTaraState).toHaveBeenCalledWith('c1', {
+        pendingReview: false,
+        bottlesOnHand: 4,
+        hasPump: true,
+      });
+    });
+
+    it('acceptOrder with a claim + pump add-on commits the balance but defers hasPump to delivery', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue({
+        id: 'o1',
+        status: 'CREATED',
+      });
+      prisma.order.update.mockResolvedValue({
+        id: 'o1',
+        clientId: 'c1',
+        status: 'ACCEPTED',
+        claimedOnHand: 4,
+        pumpAddon: true,
+      });
+
+      await service.acceptOrder('o1');
+
+      // Add-on pump is delivered later → hasPump is NOT set at acceptance.
+      expect(clients.setTaraState).toHaveBeenCalledWith('c1', {
+        pendingReview: false,
+        bottlesOnHand: 4,
+      });
+    });
+
     it('markDelivered: ACCEPTED → DELIVERED credits new tara to the client (STARTER_KIT 2 → +2)', async () => {
       prisma.order.findUniqueOrThrow.mockResolvedValue({
         id: 'o1',
@@ -284,6 +366,30 @@ describe('OrdersService', () => {
       expect(prisma.client.update).toHaveBeenCalledWith({
         where: { id: 'c1' },
         data: { bottlesOnHand: { increment: 2 }, hasPump: true },
+      });
+    });
+
+    it('markDelivered: OWN_TARA with a pump add-on records the pump on delivery (no tara credit)', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue({
+        id: 'o1',
+        status: 'ACCEPTED',
+      });
+      prisma.order.update.mockResolvedValue({
+        id: 'o1',
+        clientId: 'c1',
+        kind: 'OWN_TARA',
+        bottles: 2,
+        newTara: 0,
+        pumpAddon: true,
+        status: 'DELIVERED',
+      });
+
+      await service.markDelivered('o1');
+
+      // OWN_TARA newTara=0 → no balance increment; the add-on pump is recorded.
+      expect(prisma.client.update).toHaveBeenCalledWith({
+        where: { id: 'c1' },
+        data: { hasPump: true },
       });
     });
 
@@ -414,6 +520,64 @@ describe('OrdersService', () => {
       });
 
       await expect(service.editQuantity('o1', 3)).rejects.toThrow();
+      expect(prisma.order.update).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('editClaimedOnHand (dispatcher correction of the declared balance, step B)', () => {
+    it('updates claimedOnHand on a CREATED OWN_TARA order WITHOUT recomputing the total', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue({
+        id: 'o1',
+        status: 'CREATED',
+        kind: 'OWN_TARA',
+        claimedOnHand: 5,
+      });
+      prisma.order.update.mockResolvedValue({ id: 'o1', claimedOnHand: 3 });
+
+      await service.editClaimedOnHand('o1', 3);
+
+      // Exact data match proves only the claim is touched — no totalPrice/newTara
+      // recompute for OWN_TARA (the total is independent of the bottle count).
+      expect(prisma.order.update).toHaveBeenCalledWith({
+        where: { id: 'o1' },
+        data: { claimedOnHand: 3 },
+        include: { client: true, address: true },
+      });
+    });
+
+    it('rejects an order that is not OWN_TARA', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue({
+        id: 'o1',
+        status: 'CREATED',
+        kind: 'REPEAT',
+        claimedOnHand: null,
+      });
+
+      await expect(service.editClaimedOnHand('o1', 3)).rejects.toThrow();
+      expect(prisma.order.update).not.toHaveBeenCalled();
+    });
+
+    it('rejects an OWN_TARA order without a claim (claimedOnHand null)', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue({
+        id: 'o1',
+        status: 'CREATED',
+        kind: 'OWN_TARA',
+        claimedOnHand: null,
+      });
+
+      await expect(service.editClaimedOnHand('o1', 3)).rejects.toThrow();
+      expect(prisma.order.update).not.toHaveBeenCalled();
+    });
+
+    it('rejects once the order is no longer CREATED (balance already committed)', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue({
+        id: 'o1',
+        status: 'ACCEPTED',
+        kind: 'OWN_TARA',
+        claimedOnHand: 5,
+      });
+
+      await expect(service.editClaimedOnHand('o1', 3)).rejects.toThrow();
       expect(prisma.order.update).not.toHaveBeenCalled();
     });
   });
