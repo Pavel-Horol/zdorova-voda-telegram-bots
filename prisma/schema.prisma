@@ -58,6 +58,11 @@ model Address {
   raw       String
   comment   String?
   isDefault Boolean  @default(false)
+  /// Delivery coordinates for future route optimization. The client enters the
+  /// address as free text; the dispatcher attaches the point on demand (Telegram
+  /// location pin on mobile, or a pasted coords / maps link). Null until tagged.
+  lat       Float?
+  lng       Float?
   createdAt DateTime @default(now())
 
   client Client  @relation(fields: [clientId], references: [id], onDelete: Cascade)

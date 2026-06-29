@@ -16,6 +16,7 @@ export type DispatcherTextIntent =
   | { kind: 'menu'; action: 'orders' | 'prices' | 'stats' }
   | { kind: 'edit-quantity'; orderId: string }
   | { kind: 'edit-claim'; orderId: string }
+  | { kind: 'set-geo'; orderId: string }
   | { kind: 'edit-price'; field: EditablePriceField }
   | { kind: 'ignore' };
 
@@ -24,6 +25,8 @@ export interface DispatcherInputState {
   editingOrderId?: string;
   /** Correcting the self-declared bottle balance of an OWN_TARA order (step B). */
   editingClaimOrderId?: string;
+  /** Attaching delivery coordinates to an order's address (geo-tagging). */
+  geoTaggingOrderId?: string;
   editingPriceField?: EditablePriceField;
 }
 
@@ -53,6 +56,9 @@ export function routeDispatcherText(
   }
   if (state.editingClaimOrderId) {
     return { kind: 'edit-claim', orderId: state.editingClaimOrderId };
+  }
+  if (state.geoTaggingOrderId) {
+    return { kind: 'set-geo', orderId: state.geoTaggingOrderId };
   }
   if (state.editingPriceField) {
     return { kind: 'edit-price', field: state.editingPriceField };
@@ -85,4 +91,46 @@ export function parsePriceValue(text: string): ParseResult {
     return { ok: false };
   }
   return { ok: true, value };
+}
+
+/** Parsed geo coordinates, or null when the text is not recognised. */
+export type GeoCoords = { lat: number; lng: number };
+
+/**
+ * Validates a lat/lng pair and rejects out-of-range / non-finite values. Shared by
+ * every {@link parseGeoInput} branch so a malformed link cannot yield a bad point.
+ */
+function toCoords(latRaw: string, lngRaw: string): GeoCoords | null {
+  const lat = Number(latRaw);
+  const lng = Number(lngRaw);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+  if (lat < -90 || lat > 90 || lng < -180 || lng > 180) return null;
+  return { lat, lng };
+}
+
+/**
+ * Extracts delivery coordinates from what the dispatcher pasted: plain "lat, lng",
+ * a Google Maps link (`@lat,lng` / `q=` / `ll=`) or an OpenStreetMap link
+ * (`#map=z/lat/lng` / `mlat=&mlon=`). Returns null if nothing parseable is found
+ * (the handler asks to re-send). Native Telegram location pins do not go through
+ * here — the location handler reads them directly. Shortened links (maps.app.goo.gl)
+ * carry no coordinates in the URL and are intentionally not resolved.
+ */
+export function parseGeoInput(raw: string): GeoCoords | null {
+  const text = raw.trim();
+  // OpenStreetMap marker (?mlat=..&mlon=..)
+  let m = text.match(
+    /[?&]mlat=(-?\d+(?:\.\d+)?)\b[\s\S]*?[?&]mlon=(-?\d+(?:\.\d+)?)/,
+  );
+  if (m) return toCoords(m[1], m[2]);
+  // OpenStreetMap view (#map=zoom/lat/lng)
+  m = text.match(/#map=\d+(?:\.\d+)?\/(-?\d+(?:\.\d+)?)\/(-?\d+(?:\.\d+)?)/);
+  if (m) return toCoords(m[1], m[2]);
+  // Google Maps (@lat,lng / q=lat,lng / ll=lat,lng)
+  m = text.match(/[@=](-?\d{1,2}(?:\.\d+)?),(-?\d{1,3}(?:\.\d+)?)/);
+  if (m) return toCoords(m[1], m[2]);
+  // Plain "lat, lng"
+  m = text.match(/^(-?\d{1,2}(?:\.\d+)?)\s*,\s*(-?\d{1,3}(?:\.\d+)?)$/);
+  if (m) return toCoords(m[1], m[2]);
+  return null;
 }

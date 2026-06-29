@@ -29,6 +29,7 @@ import {
   dispatcherWelcome,
   editClaimPrompt,
   editQuantityPrompt,
+  geoTagPrompt,
   noActiveOrders,
   orderKeyboard,
   orderMessage,
@@ -43,6 +44,7 @@ import {
   BTN_PRICES,
   BTN_STATS,
   parseEditedQuantity,
+  parseGeoInput,
   parsePriceValue,
   routeDispatcherText,
 } from './dispatcher-bot.fsm';
@@ -132,6 +134,7 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
     bot.callbackQuery(/^can:(.+)$/, (ctx) => this.onTransition(ctx, 'cancel'));
     bot.callbackQuery(/^edit:(.+)$/, (ctx) => this.onEditOrder(ctx));
     bot.callbackQuery(/^claim:(.+)$/, (ctx) => this.onEditClaim(ctx));
+    bot.callbackQuery(/^geo:(.+)$/, (ctx) => this.onGeoTag(ctx));
     bot.callbackQuery('pe_cancel', (ctx) => this.onCancelPriceEdit(ctx));
     bot.callbackQuery(
       /^pe:(price1|priceFrom2|priceFrom6|depositPerBottle|pumpPrice|electroPumpPrice|waterStartPrice)$/,
@@ -139,6 +142,8 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
     );
     // message:text — after commands, so /prices and /stats do not fall here.
     bot.on('message:text', (ctx) => this.onText(ctx));
+    // Native Telegram location (mobile pin) — only acted on in geo-tagging mode.
+    bot.on('message:location', (ctx) => this.onLocation(ctx));
   }
 
   /** Button under an order: change the status and redraw the message. */
@@ -218,6 +223,7 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
     ctx.session.editingPriceField = undefined;
     ctx.session.editingOrderId = undefined;
     ctx.session.editingClaimOrderId = undefined;
+    ctx.session.geoTaggingOrderId = undefined;
     const prices = await this.pricingSettings.getCurrent();
     await ctx.reply(pricesMessage(prices), { reply_markup: pricesKeyboard() });
   }
@@ -229,6 +235,7 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
     if (!field) return;
     ctx.session.editingOrderId = undefined; // input modes are mutually exclusive
     ctx.session.editingClaimOrderId = undefined;
+    ctx.session.geoTaggingOrderId = undefined;
     ctx.session.editingPriceField = field;
     await ctx.reply(
       `Введіть нове значення для «${priceFieldLabel(field)}» (ціле число грн):`,
@@ -252,6 +259,7 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
     if (!id) return;
     ctx.session.editingPriceField = undefined; // input modes are mutually exclusive
     ctx.session.editingClaimOrderId = undefined;
+    ctx.session.geoTaggingOrderId = undefined;
     ctx.session.editingOrderId = id;
     await ctx.reply(editQuantityPrompt(id));
   }
@@ -267,8 +275,36 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
     if (!id) return;
     ctx.session.editingPriceField = undefined; // input modes are mutually exclusive
     ctx.session.editingOrderId = undefined;
+    ctx.session.geoTaggingOrderId = undefined;
     ctx.session.editingClaimOrderId = id;
     await ctx.reply(editClaimPrompt(id));
+  }
+
+  /**
+   * "📍 Прив’язати точку": remember the order and wait for the delivery coordinates,
+   * either as a native Telegram location (handled in {@link onLocation}) or as pasted
+   * coords / a maps link (handled as text via the `set-geo` intent).
+   */
+  private async onGeoTag(ctx: DispatcherContext): Promise<void> {
+    await ctx.answerCallbackQuery();
+    const id = ctx.match?.[1];
+    if (!id) return;
+    ctx.session.editingPriceField = undefined; // input modes are mutually exclusive
+    ctx.session.editingOrderId = undefined;
+    ctx.session.editingClaimOrderId = undefined;
+    ctx.session.geoTaggingOrderId = id;
+    await ctx.reply(geoTagPrompt(id));
+  }
+
+  /**
+   * Native Telegram location (mobile pin). Acted on ONLY while geo-tagging an order —
+   * a stray location otherwise is ignored, so it cannot overwrite a random address.
+   */
+  private async onLocation(ctx: DispatcherContext): Promise<void> {
+    const orderId = ctx.session.geoTaggingOrderId;
+    const location = ctx.message?.location;
+    if (!orderId || !location) return;
+    await this.applySetGeo(ctx, orderId, location.latitude, location.longitude);
   }
 
   /**
@@ -294,6 +330,18 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
         // Corrected declared balance for an OWN_TARA order (🔢 step B).
         await this.applyEditedClaim(ctx, intent.orderId, text);
         return;
+      case 'set-geo': {
+        // Pasted coordinates / maps link for an order's address (📍 geo-tagging).
+        const coords = parseGeoInput(text);
+        if (!coords) {
+          await ctx.reply(
+            'Не розпізнав координати. Надішліть локацію або «49.42, 26.99» / посилання на карту.',
+          );
+          return;
+        }
+        await this.applySetGeo(ctx, intent.orderId, coords.lat, coords.lng);
+        return;
+      }
       case 'edit-price': {
         const parsed = parsePriceValue(text);
         if (!parsed.ok) {
@@ -372,6 +420,32 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
     ctx.session.editingClaimOrderId = undefined;
     await ctx.reply(
       `Звірено ✅\n\n${orderMessage(view, view.client, view.address)}`,
+      { reply_markup: orderKeyboard(view.id, view.status, view.kind) },
+    );
+  }
+
+  /**
+   * Saves delivery coordinates to the order's address and redraws the card (with the
+   * map link). Shared by the native-location and pasted-text paths.
+   */
+  private async applySetGeo(
+    ctx: DispatcherContext,
+    orderId: string,
+    lat: number,
+    lng: number,
+  ): Promise<void> {
+    let view: OrderWithRelations;
+    try {
+      view = await this.orders.setOrderAddressGeo(orderId, lat, lng);
+    } catch {
+      // Order deleted / no longer available.
+      ctx.session.geoTaggingOrderId = undefined;
+      await ctx.reply('Не вдалося прив’язати точку до цього замовлення.');
+      return;
+    }
+    ctx.session.geoTaggingOrderId = undefined;
+    await ctx.reply(
+      `Точку збережено ✅\n\n${orderMessage(view, view.client, view.address)}`,
       { reply_markup: orderKeyboard(view.id, view.status, view.kind) },
     );
   }

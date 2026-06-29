@@ -52,6 +52,7 @@ describe('OrdersService', () => {
       update: jest.Mock;
     };
     client: { update: jest.Mock };
+    address: { update: jest.Mock };
   };
   let clients: {
     getById: jest.Mock;
@@ -77,6 +78,7 @@ describe('OrdersService', () => {
         update: jest.fn(),
       },
       client: { update: jest.fn() },
+      address: { update: jest.fn() },
     };
     clients = {
       getById: jest.fn().mockResolvedValue(client),
@@ -547,6 +549,25 @@ describe('OrdersService', () => {
 
       await expect(service.editQuantity('o1', 3)).rejects.toThrow();
       expect(prisma.order.update).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('setOrderAddressGeo (dispatcher geo-tagging)', () => {
+    it("writes lat/lng to the order's address and returns the refreshed view", async () => {
+      prisma.order.findUniqueOrThrow
+        .mockResolvedValueOnce({ id: 'o1', addressId: 'a1' })
+        .mockResolvedValueOnce({
+          id: 'o1',
+          address: { id: 'a1', lat: 49.42, lng: 26.99 },
+          client,
+        });
+
+      await service.setOrderAddressGeo('o1', 49.42, 26.99);
+
+      expect(prisma.address.update).toHaveBeenCalledWith({
+        where: { id: 'a1' },
+        data: { lat: 49.42, lng: 26.99 },
+      });
     });
   });
 

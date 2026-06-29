@@ -329,6 +329,30 @@ export class OrdersService {
   }
 
   /**
+   * Attaches delivery coordinates to an order's address (dispatcher geo-tagging, for
+   * future route optimization). The client enters the address as free text; the
+   * dispatcher pins the point on demand. Stored on the Address (reused across the
+   * client's orders), not on the Order. Returns the order view to redraw the card.
+   */
+  async setOrderAddressGeo(
+    orderId: string,
+    lat: number,
+    lng: number,
+  ): Promise<OrderWithRelations> {
+    const order = await this.prisma.order.findUniqueOrThrow({
+      where: { id: orderId },
+    });
+    await this.prisma.address.update({
+      where: { id: order.addressId },
+      data: { lat, lng },
+    });
+    return this.prisma.order.findUniqueOrThrow({
+      where: { id: orderId },
+      include: { client: true, address: true },
+    });
+  }
+
+  /**
    * Dispatcher correction of the self-declared bottle balance on a flagged OWN_TARA
    * order BEFORE acceptance (step B). The OWN_TARA total is independent of the count
    * (water by grid + optional pump, deposit 0), so `totalPrice`/`newTara` are NOT

@@ -71,6 +71,14 @@ export function editQuantityPrompt(orderId: string): string {
   return `✏️ Замовлення #${orderId.slice(0, 8)}: введіть нову кількість бутлів.`;
 }
 
+/** Prompt for delivery coordinates when geo-tagging an order's address (📍). */
+export function geoTagPrompt(orderId: string): string {
+  return (
+    `📍 Замовлення #${orderId.slice(0, 8)}: надішліть локацію (📎 → Геопозиція) ` +
+    'або вставте координати «49.42, 26.99» чи посилання на карту.'
+  );
+}
+
 /** Prompt for the corrected declared bottle balance of an OWN_TARA order (step B). */
 export function editClaimPrompt(orderId: string): string {
   return (
@@ -145,11 +153,16 @@ export function orderMessage(
         : '';
   const name = client.name ?? 'без імені';
   const comment = address.comment ? ` (${address.comment})` : '';
+  // Tagged delivery point (dispatcher geo-tagging) — a tap-to-open map link.
+  const geo =
+    address.lat != null && address.lng != null
+      ? `\n🗺 https://maps.google.com/?q=${address.lat},${address.lng}`
+      : '';
   return (
     `${header} #${order.id.slice(0, 8)}${mark}\n` +
     `🕒 ${formatDateTime(order.createdAt)}\n` +
     `${composition(order)}\n` +
-    `📍 ${address.raw}${comment}\n` +
+    `📍 ${address.raw}${comment}${geo}\n` +
     `👤 ${name} (${client.phone})\n` +
     `💰 ${order.totalPrice} грн готівкою водієві`
   );
@@ -176,6 +189,7 @@ export function orderKeyboard(
       if (kind === OrderKind.OWN_TARA) {
         kb.row().text('🔢 Звірити баки', `claim:${orderId}`);
       }
+      kb.row().text('📍 Прив’язати точку', `geo:${orderId}`);
       return kb;
     }
     case OrderStatus.ACCEPTED:
@@ -183,7 +197,9 @@ export function orderKeyboard(
         .text('🚚 Доставлено', `del:${orderId}`)
         .text('❌ Скасувати', `can:${orderId}`)
         .row()
-        .text('✏️ Змінити', `edit:${orderId}`);
+        .text('✏️ Змінити', `edit:${orderId}`)
+        .row()
+        .text('📍 Прив’язати точку', `geo:${orderId}`);
     default:
       return undefined;
   }

@@ -3,6 +3,7 @@ import {
   BTN_PRICES,
   BTN_STATS,
   parseEditedQuantity,
+  parseGeoInput,
   parsePriceValue,
   routeDispatcherText,
 } from './dispatcher-bot.fsm';
@@ -73,6 +74,12 @@ describe('routeDispatcherText', () => {
     ).toEqual({ kind: 'edit-claim', orderId: 'o7' });
   });
 
+  it('only geo-tagging is active → set-geo', () => {
+    expect(
+      routeDispatcherText('49.42, 26.99', { geoTaggingOrderId: 'o9' }),
+    ).toEqual({ kind: 'set-geo', orderId: 'o9' });
+  });
+
   it('only price editing is active → edit-price', () => {
     expect(
       routeDispatcherText('30', { editingPriceField: 'pumpPrice' }),
@@ -122,5 +129,53 @@ describe('parsePriceValue', () => {
   it('non-integer / not a number → rejection', () => {
     expect(parsePriceValue('99.9')).toEqual({ ok: false });
     expect(parsePriceValue('грн')).toEqual({ ok: false });
+  });
+});
+
+describe('parseGeoInput', () => {
+  it('plain "lat, lng" (with or without spaces) → coords', () => {
+    expect(parseGeoInput('49.42, 26.99')).toEqual({ lat: 49.42, lng: 26.99 });
+    expect(parseGeoInput('49.42,26.99')).toEqual({ lat: 49.42, lng: 26.99 });
+  });
+
+  it('Google Maps links (@lat,lng / q= / ll=) → coords', () => {
+    expect(
+      parseGeoInput(
+        'https://www.google.com/maps/place/X/@49.42,26.99,17z/data',
+      ),
+    ).toEqual({ lat: 49.42, lng: 26.99 });
+    expect(parseGeoInput('https://maps.google.com/?q=49.42,26.99')).toEqual({
+      lat: 49.42,
+      lng: 26.99,
+    });
+    expect(parseGeoInput('https://maps.google.com/?ll=49.42,26.99')).toEqual({
+      lat: 49.42,
+      lng: 26.99,
+    });
+  });
+
+  it('OpenStreetMap links (#map / mlat&mlon) → coords', () => {
+    expect(
+      parseGeoInput('https://www.openstreetmap.org/#map=18/49.42/26.99'),
+    ).toEqual({
+      lat: 49.42,
+      lng: 26.99,
+    });
+    expect(
+      parseGeoInput('https://www.openstreetmap.org/?mlat=49.42&mlon=26.99'),
+    ).toEqual({ lat: 49.42, lng: 26.99 });
+  });
+
+  it('out-of-range coordinates → null', () => {
+    expect(parseGeoInput('100, 26.99')).toBeNull(); // lat > 90
+    expect(parseGeoInput('49.42, 200')).toBeNull(); // lng > 180
+  });
+
+  it('non-geo text (a textual maps query, a bare number, garbage) → null', () => {
+    expect(
+      parseGeoInput('https://maps.google.com/?q=Хмельницького'),
+    ).toBeNull();
+    expect(parseGeoInput('5')).toBeNull();
+    expect(parseGeoInput('привіт')).toBeNull();
   });
 });

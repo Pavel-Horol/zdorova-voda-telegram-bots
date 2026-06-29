@@ -31,6 +31,8 @@ export interface DispatcherSession {
   editingOrderId?: string;
   /** id of the OWN_TARA order we are awaiting a corrected declared balance for (step B). */
   editingClaimOrderId?: string;
+  /** id of the order we are awaiting delivery coordinates for (📍 geo-tagging). */
+  geoTaggingOrderId?: string;
 }
 
 export type DispatcherContext = Context & SessionFlavor<DispatcherSession>;
