@@ -62,8 +62,10 @@ describe('PricingService.calculateTotal', () => {
       expect(service.newTara(2, 'REPEAT', 5)).toBe(0);
     });
 
-    it('OWN_TARA — zero (the client tara)', () => {
-      expect(service.newTara(4, 'OWN_TARA', 0)).toBe(0);
+    it('OWN_TARA — above the declared on-hand (tara top-up), same as REPEAT', () => {
+      expect(service.newTara(4, 'OWN_TARA', 3)).toBe(1); // order 4, has 3 → 1 new bottle
+      expect(service.newTara(3, 'OWN_TARA', 3)).toBe(0); // exact exchange → none
+      expect(service.newTara(2, 'OWN_TARA', 5)).toBe(0); // fewer than on hand → none
     });
   });
 
@@ -79,15 +81,24 @@ describe('PricingService.calculateTotal', () => {
     });
   });
 
-  describe('own bottles (OWN_TARA) — water by grid only, deposit 0', () => {
+  describe('own bottles (OWN_TARA) — exchange at grid (deposit 0), top-up under deposit', () => {
+    // Has at least as many own bottles as ordered → pure exchange, no deposit.
     it.each([
       [1, 80],
       [3, 210],
       [6, 390],
-    ])('%i bottle(s) → %i UAH', (bottles, expected) => {
-      expect(service.calculateTotal(bottles, 'OWN_TARA', prices)).toBe(
+    ])('%i bottle(s) with enough own tara → %i UAH', (bottles, expected) => {
+      expect(service.calculateTotal(bottles, 'OWN_TARA', prices, bottles)).toBe(
         expected,
       );
+    });
+
+    it('ordered above the on-hand → deposit on the extra (3 on hand, order 4 → 4×70 + 450 = 730)', () => {
+      expect(service.calculateTotal(4, 'OWN_TARA', prices, 3)).toBe(730);
+    });
+
+    it('ordered exactly the on-hand → no top-up (3 on hand, order 3 → 210)', () => {
+      expect(service.calculateTotal(3, 'OWN_TARA', prices, 3)).toBe(210);
     });
   });
 
@@ -102,9 +113,9 @@ describe('PricingService.calculateTotal', () => {
       expect(service.calculateTotal(1, 'STARTER_KIT', prices, 0, {})).toBe(750);
     });
 
-    it('own bottles with a pump add-on: 2 bottles → 2×70 + 250 = 390', () => {
+    it('own bottles with a pump add-on: 2 bottles, 2 on hand → 2×70 + 250 = 390', () => {
       expect(
-        service.calculateTotal(2, 'OWN_TARA', prices, 0, { pumpAddon: true }),
+        service.calculateTotal(2, 'OWN_TARA', prices, 2, { pumpAddon: true }),
       ).toBe(390);
     });
   });

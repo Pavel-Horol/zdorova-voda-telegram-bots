@@ -47,12 +47,17 @@ export class PricingService {
           bottles * prices.waterStartPrice
         );
       }
-      case 'OWN_TARA':
-        // Own bottles: water by grid + pump add-on (250) if the client has none.
+      case 'OWN_TARA': {
+        // Own bottles: water by grid for the whole quantity + deposit for any bottles
+        // ordered ABOVE the declared on-hand (tara top-up, same as REPEAT — the client
+        // exchanges their own, the extras are new tara under deposit) + optional pump add-on.
+        const newTara = this.newTara(bottles, kind, bottlesOnHand);
         return (
           this.waterByGrid(bottles, prices) +
+          newTara * prices.depositPerBottle +
           (opts.pumpAddon ? prices.pumpPrice : 0)
         );
+      }
       case 'REPEAT': {
         // Water by grid for the WHOLE quantity + deposit per new bottle above the remainder.
         const newTara = this.newTara(bottles, kind, bottlesOnHand);
@@ -67,15 +72,16 @@ export class PricingService {
 
   /**
    * How many bottles of the order are new tara (under deposit): STARTER_KIT — all
-   * bottles; REPEAT — above the remainder on hand; OWN_TARA — zero (the client's
-   * tara). Shared by the total calculation and the balance credit on delivery
-   * (PRODUCT.md "tara top-up").
+   * bottles; REPEAT and OWN_TARA — those ordered above the bottles on hand (for
+   * OWN_TARA that is the self-declared `claimedOnHand`). Shared by the total
+   * calculation and the balance credit on delivery (PRODUCT.md "tara top-up").
    */
   newTara(bottles: number, kind: OrderKind, bottlesOnHand: number): number {
     switch (kind) {
       case 'STARTER_KIT':
         return bottles;
       case 'REPEAT':
+      case 'OWN_TARA':
         return Math.max(0, bottles - bottlesOnHand);
       default:
         return 0;
