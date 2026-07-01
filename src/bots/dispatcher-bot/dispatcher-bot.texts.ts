@@ -94,6 +94,7 @@ export const dispatcherHelp =
   '/orders — активні замовлення (created/accepted) списком\n' +
   '/prices — переглянути та змінити ціни\n' +
   '/stats — статистика за замовленнями\n' +
+  '/client — знайти клієнта за номером телефону\n' +
   '/help — ця довідка';
 
 /**
@@ -104,6 +105,7 @@ export const dispatcherCommands = [
   { command: 'orders', description: '📋 Активні замовлення' },
   { command: 'prices', description: '💰 Ціни' },
   { command: 'stats', description: '📊 Статистика' },
+  { command: 'client', description: '🔎 Знайти клієнта за телефоном' },
   { command: 'help', description: '❓ Довідка' },
 ];
 
@@ -156,7 +158,7 @@ export function orderMessage(
   // Tagged delivery point (dispatcher geo-tagging) — a tap-to-open map link.
   const geo =
     address.lat != null && address.lng != null
-      ? `\n🗺 https://maps.google.com/?q=${address.lat},${address.lng}`
+      ? `\n🗺 ${mapsLink(address.lat, address.lng)}`
       : '';
   return (
     `${header} #${order.id.slice(0, 8)}${mark}\n` +
@@ -189,7 +191,9 @@ export function orderKeyboard(
       if (kind === OrderKind.OWN_TARA) {
         kb.row().text('🔢 Звірити баки', `claim:${orderId}`);
       }
-      kb.row().text('📍 Прив’язати точку', `geo:${orderId}`);
+      kb.row()
+        .text('📍 Прив’язати точку', `geo:${orderId}`)
+        .text('📋 Рядок водію', `drvline:${orderId}`);
       return kb;
     }
     case OrderStatus.ACCEPTED:
@@ -199,10 +203,58 @@ export function orderKeyboard(
         .row()
         .text('✏️ Змінити', `edit:${orderId}`)
         .row()
-        .text('📍 Прив’язати точку', `geo:${orderId}`);
+        .text('📍 Прив’язати точку', `geo:${orderId}`)
+        .text('📋 Рядок водію', `drvline:${orderId}`);
     default:
       return undefined;
   }
+}
+
+/** Google Maps link for a tagged delivery point (shared by the card and driver line). */
+function mapsLink(lat: number, lng: number): string {
+  return `https://maps.google.com/?q=${lat},${lng}`;
+}
+
+/**
+ * Compact "what + how much" head of the driver line. Water orders (REPEAT/OWN_TARA):
+ * `Nпо{unit}` (+ `+{newTara} бак` when topping up tara under deposit, + `+помпа` for an
+ * OWN_TARA add-on) and `= {total} грн`. Starter kit: a `[ПЕРШИЙ N +помпа|+електро]`
+ * marker instead of a per-bottle price. `unit` is the live grid price per bottle; the
+ * total is the frozen order total.
+ */
+function driverPriceSpec(order: Order, unit: number): string {
+  if (order.kind === OrderKind.STARTER_KIT) {
+    const pump = order.electro ? '+електро' : '+помпа';
+    return `[ПЕРШИЙ ${order.bottles} ${pump}] = ${order.totalPrice} грн`;
+  }
+  let spec = `${order.bottles}по${unit}`;
+  if (order.newTara > 0) spec += ` +${order.newTara} бак`;
+  if (order.pumpAddon) spec += ' +помпа';
+  return `${spec} = ${order.totalPrice} грн`;
+}
+
+/**
+ * Forward-friendly hand-off block for the driver (PRODUCT.md "строка водію"). Sent as
+ * a standalone message so the dispatcher can forward it. Format: price spec + address
+ * + client name, and a maps link when the order's address is geo-tagged. `unit` is the
+ * current per-bottle grid price (loaded by the handler).
+ */
+export function driverLine(
+  order: Order,
+  client: Client,
+  address: Address,
+  unit: number,
+): string {
+  const comment = address.comment ? ` (${address.comment})` : '';
+  const name = client.name ?? 'без імені';
+  let out =
+    `${driverPriceSpec(order, unit)}\n` +
+    `📍 ${address.raw}${comment}\n` +
+    `👤 ${name}`;
+  if (address.lat != null && address.lng != null) {
+    out += `\n🗺 ${mapsLink(address.lat, address.lng)}`;
+  }
+  return out;
 }
 
 /** Notify the dispatcher about an order cancelled by the client from the bot (SPEC §9). */
@@ -212,6 +264,49 @@ export function clientCancelledMessage(order: Order, client: Client): string {
     `❌ Клієнт скасував замовлення #${order.id.slice(0, 8)}\n` +
     `Клієнт: ${name} (${client.phone})`
   );
+}
+
+/** Prompt for the phone number when looking a client up (🔎 Клієнт). */
+export const clientLookupPrompt =
+  'Введіть номер телефону клієнта (можна частину, напр. останні цифри):';
+
+/** No client matched the looked-up phone. */
+export const noClientFound = 'Клієнтів за цим номером не знайдено.';
+
+/**
+ * Client card for the dispatcher lookup (🔎 Клієнт): identity, tara/pump state, the
+ * default address (with a map link if tagged) and the last order. Read-only summary
+ * to help the dispatcher when a client calls.
+ */
+export function clientCardMessage(
+  client: Client,
+  address: Address | null,
+  lastOrder: Order | null,
+): string {
+  const name = client.name ?? 'без імені';
+  const review = client.pendingReview ? ' ⚠️ на звірці' : '';
+  const pump = client.hasPump ? 'є помпа' : 'без помпи';
+  const lines = [
+    `👤 ${name} (${client.phone})${review}`,
+    `🪣 баків на руках: ${client.bottlesOnHand}, ${pump}`,
+  ];
+  if (address) {
+    const comment = address.comment ? ` (${address.comment})` : '';
+    let line = `📍 ${address.raw}${comment}`;
+    if (address.lat != null && address.lng != null) {
+      line += `\n🗺 ${mapsLink(address.lat, address.lng)}`;
+    }
+    lines.push(line);
+  } else {
+    lines.push('📍 адреси ще немає');
+  }
+  if (lastOrder) {
+    lines.push(
+      `🕒 останнє: ${formatDateTime(lastOrder.createdAt)} — ` +
+        `${lastOrder.bottles} бут., ${lastOrder.totalPrice} грн`,
+    );
+  }
+  return lines.join('\n');
 }
 
 /** Notify the dispatcher about a callback request from the "Other" onboarding case. */

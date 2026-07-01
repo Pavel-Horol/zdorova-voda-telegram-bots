@@ -11,6 +11,7 @@ import {
   OrdersService,
   type OrderWithRelations,
 } from '../../modules/orders/orders.service';
+import { ClientsService } from '../../modules/clients/clients.service';
 import {
   PricingSettingsService,
   type EditablePriceField,
@@ -26,11 +27,15 @@ import {
   activeOrdersHeader,
   dispatcherCommands,
   dispatcherHelp,
+  clientCardMessage,
+  clientLookupPrompt,
   dispatcherWelcome,
+  driverLine,
   editClaimPrompt,
   editQuantityPrompt,
   geoTagPrompt,
   noActiveOrders,
+  noClientFound,
   orderKeyboard,
   orderMessage,
   priceEditCancelKeyboard,
@@ -40,12 +45,14 @@ import {
   statsMessage,
 } from './dispatcher-bot.texts';
 import {
+  BTN_CLIENT,
   BTN_ORDERS,
   BTN_PRICES,
   BTN_STATS,
   parseEditedQuantity,
   parseGeoInput,
   parsePriceValue,
+  phoneSearchToken,
   routeDispatcherText,
 } from './dispatcher-bot.fsm';
 
@@ -58,6 +65,8 @@ const dispatcherMenuKeyboard = new Keyboard()
   .row()
   .text(BTN_PRICES)
   .text(BTN_STATS)
+  .row()
+  .text(BTN_CLIENT)
   .resized()
   .persistent();
 
@@ -75,6 +84,7 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
     private readonly config: ConfigService,
     private readonly orders: OrdersService,
     private readonly pricingSettings: PricingSettingsService,
+    private readonly clients: ClientsService,
   ) {}
 
   onModuleInit(): void {
@@ -129,12 +139,14 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
     bot.command('orders', (ctx) => this.onActiveOrders(ctx));
     bot.command('prices', (ctx) => this.onPrices(ctx));
     bot.command('stats', (ctx) => this.onStats(ctx));
+    bot.command('client', (ctx) => this.onClientLookupStart(ctx));
     bot.callbackQuery(/^acc:(.+)$/, (ctx) => this.onTransition(ctx, 'accept'));
     bot.callbackQuery(/^del:(.+)$/, (ctx) => this.onTransition(ctx, 'deliver'));
     bot.callbackQuery(/^can:(.+)$/, (ctx) => this.onTransition(ctx, 'cancel'));
     bot.callbackQuery(/^edit:(.+)$/, (ctx) => this.onEditOrder(ctx));
     bot.callbackQuery(/^claim:(.+)$/, (ctx) => this.onEditClaim(ctx));
     bot.callbackQuery(/^geo:(.+)$/, (ctx) => this.onGeoTag(ctx));
+    bot.callbackQuery(/^drvline:(.+)$/, (ctx) => this.onDriverLine(ctx));
     bot.callbackQuery('pe_cancel', (ctx) => this.onCancelPriceEdit(ctx));
     bot.callbackQuery(
       /^pe:(price1|priceFrom2|priceFrom6|depositPerBottle|pumpPrice|electroPumpPrice|waterStartPrice)$/,
@@ -224,6 +236,7 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
     ctx.session.editingOrderId = undefined;
     ctx.session.editingClaimOrderId = undefined;
     ctx.session.geoTaggingOrderId = undefined;
+    ctx.session.lookupClient = undefined;
     const prices = await this.pricingSettings.getCurrent();
     await ctx.reply(pricesMessage(prices), { reply_markup: pricesKeyboard() });
   }
@@ -236,6 +249,7 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
     ctx.session.editingOrderId = undefined; // input modes are mutually exclusive
     ctx.session.editingClaimOrderId = undefined;
     ctx.session.geoTaggingOrderId = undefined;
+    ctx.session.lookupClient = undefined;
     ctx.session.editingPriceField = field;
     await ctx.reply(
       `Введіть нове значення для «${priceFieldLabel(field)}» (ціле число грн):`,
@@ -260,6 +274,7 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
     ctx.session.editingPriceField = undefined; // input modes are mutually exclusive
     ctx.session.editingClaimOrderId = undefined;
     ctx.session.geoTaggingOrderId = undefined;
+    ctx.session.lookupClient = undefined;
     ctx.session.editingOrderId = id;
     await ctx.reply(editQuantityPrompt(id));
   }
@@ -276,6 +291,7 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
     ctx.session.editingPriceField = undefined; // input modes are mutually exclusive
     ctx.session.editingOrderId = undefined;
     ctx.session.geoTaggingOrderId = undefined;
+    ctx.session.lookupClient = undefined;
     ctx.session.editingClaimOrderId = id;
     await ctx.reply(editClaimPrompt(id));
   }
@@ -292,8 +308,83 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
     ctx.session.editingPriceField = undefined; // input modes are mutually exclusive
     ctx.session.editingOrderId = undefined;
     ctx.session.editingClaimOrderId = undefined;
+    ctx.session.lookupClient = undefined;
     ctx.session.geoTaggingOrderId = id;
     await ctx.reply(geoTagPrompt(id));
+  }
+
+  /**
+   * "🔎 Клієнт" / /client: start a client lookup by phone. With an inline argument
+   * (`/client 0501234567`) searches right away; otherwise waits for the phone as text.
+   */
+  private async onClientLookupStart(ctx: DispatcherContext): Promise<void> {
+    ctx.session.editingPriceField = undefined; // input modes are mutually exclusive
+    ctx.session.editingOrderId = undefined;
+    ctx.session.editingClaimOrderId = undefined;
+    ctx.session.geoTaggingOrderId = undefined;
+    const arg = ctx.match;
+    const query = typeof arg === 'string' ? arg.trim() : '';
+    if (query) {
+      ctx.session.lookupClient = undefined;
+      await this.applyClientLookup(ctx, query);
+      return;
+    }
+    ctx.session.lookupClient = true;
+    await ctx.reply(clientLookupPrompt);
+  }
+
+  /**
+   * Looks clients up by a phone fragment and replies with a card per match (identity,
+   * tara/pump, default address + map link, last order). Read-only.
+   */
+  private async applyClientLookup(
+    ctx: DispatcherContext,
+    rawPhone: string,
+  ): Promise<void> {
+    ctx.session.lookupClient = undefined;
+    const token = phoneSearchToken(rawPhone);
+    if (!token) {
+      await ctx.reply('Замало цифр. Введіть більше цифр номера.');
+      return;
+    }
+    const clients = await this.clients.searchByPhone(token);
+    if (!clients.length) {
+      await ctx.reply(noClientFound);
+      return;
+    }
+    for (const client of clients) {
+      const [address, recent] = await Promise.all([
+        this.clients.getDefaultAddress(client.id),
+        this.orders.listByClient(client.id, 1),
+      ]);
+      await ctx.reply(clientCardMessage(client, address, recent[0] ?? null), {
+        link_preview_options: { is_disabled: true },
+      });
+    }
+  }
+
+  /**
+   * "📋 Рядок водію": sends the forward-friendly hand-off block as a STANDALONE
+   * message, so the dispatcher can forward it to the driver (a line embedded in the
+   * card cannot be forwarded alone). Read-only — does not change the order.
+   */
+  private async onDriverLine(ctx: DispatcherContext): Promise<void> {
+    const id = ctx.match?.[1];
+    if (!id) {
+      await ctx.answerCallbackQuery();
+      return;
+    }
+    const view = await this.orders.getOrderView(id);
+    if (!view) {
+      await ctx.answerCallbackQuery({ text: 'Замовлення недоступне' });
+      return;
+    }
+    await ctx.answerCallbackQuery();
+    const unit = await this.orders.waterUnitPrice(view.bottles);
+    // No link preview — keep the forwarded block compact.
+    await ctx.reply(driverLine(view, view.client, view.address, unit), {
+      link_preview_options: { is_disabled: true },
+    });
   }
 
   /**
@@ -320,7 +411,13 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
       case 'menu':
         if (intent.action === 'orders') await this.onActiveOrders(ctx);
         else if (intent.action === 'prices') await this.onPrices(ctx);
+        else if (intent.action === 'client')
+          await this.onClientLookupStart(ctx);
         else await this.onStats(ctx);
+        return;
+      case 'lookup-client':
+        // Phone typed after "🔎 Клієнт" — search and show client card(s).
+        await this.applyClientLookup(ctx, text);
         return;
       case 'edit-quantity':
         // New quantity input for an order (✏️ Edit) — priority over price.

@@ -86,6 +86,12 @@ interface SessionData {
    */
   editing?: boolean;
   /**
+   * Standalone address management ("📍 Моя адреса" menu, not an order): the
+   * address/comment steps save the default address and return to the menu instead of
+   * continuing to quantity selection. Cleared on resetSession.
+   */
+  managingAddress?: boolean;
+  /**
    * message_id of the last sent inline scenario screen. On any transition away
    * from it we strip the keyboard so no "dead" buttons hang in the chat (tapping
    * them is already blocked by step guards, but it looks confusing).
@@ -107,6 +113,7 @@ const CB_EDIT_BACK = 'nav:editback';
 const BTN_ORDER = '🚰 Замовити воду';
 const BTN_HISTORY = '📋 Мої замовлення';
 const BTN_PRICES = '💰 Ціни';
+const BTN_ADDRESS = '📍 Моя адреса';
 const BTN_CONTACTS = '📞 Зв’язатися';
 
 /** Max bottles via buttons (3+ still goes at the same price, SPEC §3.1). */
@@ -124,6 +131,7 @@ const mainReplyKeyboard = new Keyboard()
   .text(BTN_HISTORY)
   .text(BTN_PRICES)
   .row()
+  .text(BTN_ADDRESS)
   .text(BTN_CONTACTS)
   .resized()
   .persistent();
@@ -163,6 +171,12 @@ function buildHistoryKeyboard(orders: Order[]): InlineKeyboard | undefined {
 
 /** Under the address prompt — only "Cancel" (from the first step, "back" = exit). */
 const addressKeyboard = new InlineKeyboard().text('❌ Скасувати', CB_CANCEL);
+
+/** Under "📍 Моя адреса": change the saved address (standalone, returns to the menu). */
+const addressViewKeyboard = new InlineKeyboard().text(
+  '✏️ Змінити адресу',
+  'addr:edit',
+);
 
 /** Under the address comment prompt: skip (comment is optional) / cancel. */
 const commentKeyboard = new InlineKeyboard()
@@ -311,6 +325,7 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
     bot.callbackQuery(/^ed:(qty|addr|comment|pump)$/, (ctx) =>
       this.onEditChoice(ctx),
     );
+    bot.callbackQuery('addr:edit', (ctx) => this.onManageAddressStart(ctx));
     bot.callbackQuery(CB_BACK, (ctx) => this.onBack(ctx));
     bot.callbackQuery(CB_CANCEL, (ctx) => this.onCancel(ctx));
     bot.callbackQuery(CB_SKIP, (ctx) => this.onSkipComment(ctx));
@@ -413,6 +428,9 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
       case BTN_PRICES:
         await this.showPrices(ctx);
         return;
+      case BTN_ADDRESS:
+        await this.showAddress(ctx);
+        return;
       case BTN_CONTACTS:
         await this.showContacts(ctx);
         return;
@@ -451,7 +469,8 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
     if (!client) return;
     if (ctx.session.editing) {
       // Edit mode: update only the address (keep the existing comment) and go back
-      // to Confirm — no second pass through the comment step.
+      // to Confirm — no second pass through the comment step. On a raw change
+      // setDefaultAddress drops a now-stale dispatcher pin (it pointed at the old place).
       const addr = await this.clients.getDefaultAddress(client.id);
       await this.clients.setDefaultAddress(client.id, {
         raw,
@@ -493,6 +512,19 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
         });
       }
       await this.returnToConfirm(ctx);
+      return;
+    }
+    if (ctx.session.managingAddress) {
+      // Standalone address management ("📍 Моя адреса"): save the default address and
+      // return to the menu (no quantity step). A shared pin (session geo) is written too.
+      const raw = ctx.session.addressRaw;
+      if (!raw) {
+        await this.renderAddressPrompt(ctx);
+        return;
+      }
+      await this.clients.setDefaultAddress(client.id, { raw, comment });
+      this.resetSession(ctx, Step.MainMenu);
+      await this.replyMenu(ctx, texts.addressSaved);
       return;
     }
     const raw = ctx.session.addressRaw;
@@ -706,6 +738,40 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
     const phone =
       this.config.get<string>('SUPPORT_PHONE') ?? '(телефон уточнюється)';
     await this.replyMenu(ctx, texts.contacts(phone));
+  }
+
+  /**
+   * "📍 Моя адреса": show the saved default address (with a change button). No saved
+   * address yet → go straight into entering one. Interrupts an active order (global nav).
+   */
+  private async showAddress(ctx: BotContext): Promise<void> {
+    const client = await this.requireClient(ctx);
+    if (!client) return;
+    this.leaveOrderFlow(ctx);
+
+    const address = await this.clients.getDefaultAddress(client.id);
+    if (!address) {
+      // Nothing saved — start collecting it (standalone, returns to the menu).
+      ctx.session.managingAddress = true;
+      ctx.session.history = [Step.MainMenu];
+      await this.renderAddressPrompt(ctx);
+      return;
+    }
+    await this.replyInline(
+      ctx,
+      texts.addressView(address),
+      addressViewKeyboard,
+    );
+  }
+
+  /** "✏️ Змінити адресу": enter standalone address editing (returns to the menu). */
+  private async onManageAddressStart(ctx: BotContext): Promise<void> {
+    await ctx.answerCallbackQuery();
+    const client = await this.requireClient(ctx);
+    if (!client) return;
+    ctx.session.managingAddress = true;
+    ctx.session.history = [Step.MainMenu];
+    await this.renderAddressPrompt(ctx);
   }
 
   /** Quantity chosen: compute the price preview and show the confirmation. */
@@ -957,7 +1023,11 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
 
   private async renderAddressPrompt(ctx: BotContext): Promise<void> {
     ctx.session.step = Step.AwaitAddress;
-    await this.replyInline(ctx, texts.awaitAddress, addressKeyboard);
+    // "First order" wording only for a genuine first address; changing an existing one
+    // (standalone management or editing on Confirm) uses neutral copy.
+    const changing = ctx.session.managingAddress || ctx.session.editing;
+    const prompt = changing ? texts.changeAddress : texts.awaitAddress;
+    await this.replyInline(ctx, prompt, addressKeyboard);
   }
 
   private async renderCommentPrompt(ctx: BotContext): Promise<void> {
@@ -1065,6 +1135,7 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
     ctx.session.electro = undefined;
     ctx.session.pumpAddon = undefined;
     ctx.session.editing = undefined;
+    ctx.session.managingAddress = undefined;
     ctx.session.history = [];
   }
 

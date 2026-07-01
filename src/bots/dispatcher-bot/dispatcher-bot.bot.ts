@@ -33,6 +33,8 @@ export interface DispatcherSession {
   editingClaimOrderId?: string;
   /** id of the order we are awaiting delivery coordinates for (📍 geo-tagging). */
   geoTaggingOrderId?: string;
+  /** awaiting a phone number to look a client up (🔎 Клієнт). */
+  lookupClient?: boolean;
 }
 
 export type DispatcherContext = Context & SessionFlavor<DispatcherSession>;

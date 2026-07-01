@@ -26,6 +26,19 @@ export class ClientsService {
     return this.prisma.client.findUnique({ where: { phone } });
   }
 
+  /**
+   * Looks up clients by a phone-number fragment (dispatcher 🔎 Клієнт). `token` is a
+   * digit substring (see phoneSearchToken); matches any stored phone containing it.
+   * Newest first, capped — a lookup, not a full scan.
+   */
+  searchByPhone(token: string, limit = 5): Promise<Client[]> {
+    return this.prisma.client.findMany({
+      where: { phone: { contains: token } },
+      orderBy: { createdAt: 'desc' },
+      take: limit,
+    });
+  }
+
   getById(id: string): Promise<Client | null> {
     return this.prisma.client.findUnique({ where: { id } });
   }
@@ -112,9 +125,17 @@ export class ClientsService {
   ): Promise<Address> {
     const existing = await this.getDefaultAddress(clientId);
     if (existing) {
+      // The dispatcher's geo-pin belongs to the PREVIOUS raw text. If the street/house
+      // changes, the pin no longer matches — drop it so a stale point doesn't route the
+      // driver to the old place (the dispatcher re-tags). A comment-only edit keeps it.
+      const rawChanged = existing.raw !== input.raw;
       return this.prisma.address.update({
         where: { id: existing.id },
-        data: { raw: input.raw, comment: input.comment ?? null },
+        data: {
+          raw: input.raw,
+          comment: input.comment ?? null,
+          ...(rawChanged ? { lat: null, lng: null } : {}),
+        },
       });
     }
     return this.addAddress(clientId, {

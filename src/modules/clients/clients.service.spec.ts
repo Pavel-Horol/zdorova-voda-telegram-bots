@@ -8,7 +8,12 @@ jest.mock('../../prisma/prisma.service', () => ({ PrismaService: class {} }));
 describe('ClientsService', () => {
   let service: ClientsService;
   let prisma: {
-    client: { findUnique: jest.Mock; create: jest.Mock; update: jest.Mock };
+    client: {
+      findUnique: jest.Mock;
+      findMany: jest.Mock;
+      create: jest.Mock;
+      update: jest.Mock;
+    };
     address: {
       findMany: jest.Mock;
       findFirst: jest.Mock;
@@ -21,7 +26,12 @@ describe('ClientsService', () => {
 
   beforeEach(() => {
     prisma = {
-      client: { findUnique: jest.fn(), create: jest.fn(), update: jest.fn() },
+      client: {
+        findUnique: jest.fn(),
+        findMany: jest.fn(),
+        create: jest.fn(),
+        update: jest.fn(),
+      },
       address: {
         findMany: jest.fn(),
         findFirst: jest.fn(),
@@ -32,6 +42,20 @@ describe('ClientsService', () => {
       $transaction: jest.fn(),
     };
     service = new ClientsService(prisma as unknown as PrismaService);
+  });
+
+  describe('searchByPhone', () => {
+    it('matches clients whose phone contains the token, newest first, capped', async () => {
+      const found = [{ id: 'c1', phone: '+380501234567' }];
+      prisma.client.findMany.mockResolvedValue(found);
+
+      await expect(service.searchByPhone('501234567')).resolves.toEqual(found);
+      expect(prisma.client.findMany).toHaveBeenCalledWith({
+        where: { phone: { contains: '501234567' } },
+        orderBy: { createdAt: 'desc' },
+        take: 5,
+      });
+    });
   });
 
   describe('getDefaultAddress', () => {
@@ -97,8 +121,12 @@ describe('ClientsService', () => {
   });
 
   describe('setDefaultAddress', () => {
-    it('updates the existing default address (without creating a dupe)', async () => {
-      prisma.address.findFirst.mockResolvedValue({ id: 'a1', isDefault: true });
+    it('updates the existing default address (without creating a dupe) and drops a stale geo-pin on a raw change', async () => {
+      prisma.address.findFirst.mockResolvedValue({
+        id: 'a1',
+        isDefault: true,
+        raw: 'St. 1',
+      });
       prisma.address.update.mockResolvedValue({ id: 'a1', raw: 'St. 9' });
 
       await service.setDefaultAddress('c1', {
@@ -106,11 +134,32 @@ describe('ClientsService', () => {
         comment: 'floor 3',
       });
 
+      // raw changed (St. 1 → St. 9) → coordinates of the old place are invalidated.
       expect(prisma.address.update).toHaveBeenCalledWith({
         where: { id: 'a1' },
-        data: { raw: 'St. 9', comment: 'floor 3' },
+        data: { raw: 'St. 9', comment: 'floor 3', lat: null, lng: null },
       });
       expect(prisma.address.create).not.toHaveBeenCalled();
+    });
+
+    it('keeps the geo-pin when only the comment changes (raw unchanged)', async () => {
+      prisma.address.findFirst.mockResolvedValue({
+        id: 'a1',
+        isDefault: true,
+        raw: 'St. 1',
+      });
+      prisma.address.update.mockResolvedValue({ id: 'a1', raw: 'St. 1' });
+
+      await service.setDefaultAddress('c1', {
+        raw: 'St. 1',
+        comment: 'code 42',
+      });
+
+      // raw is the same → lat/lng are not touched (no stale-pin reset).
+      expect(prisma.address.update).toHaveBeenCalledWith({
+        where: { id: 'a1' },
+        data: { raw: 'St. 1', comment: 'code 42' },
+      });
     });
 
     it('creates a default address if there is none yet', async () => {

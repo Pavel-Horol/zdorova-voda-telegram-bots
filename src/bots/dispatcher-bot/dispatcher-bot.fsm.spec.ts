@@ -1,10 +1,12 @@
 import {
+  BTN_CLIENT,
   BTN_ORDERS,
   BTN_PRICES,
   BTN_STATS,
   parseEditedQuantity,
   parseGeoInput,
   parsePriceValue,
+  phoneSearchToken,
   routeDispatcherText,
 } from './dispatcher-bot.fsm';
 
@@ -78,6 +80,19 @@ describe('routeDispatcherText', () => {
     expect(
       routeDispatcherText('49.42, 26.99', { geoTaggingOrderId: 'o9' }),
     ).toEqual({ kind: 'set-geo', orderId: 'o9' });
+  });
+
+  it('"Client" button → client lookup menu', () => {
+    expect(routeDispatcherText(BTN_CLIENT, noMode)).toEqual({
+      kind: 'menu',
+      action: 'client',
+    });
+  });
+
+  it('only client lookup is active → lookup-client', () => {
+    expect(routeDispatcherText('050', { lookupClient: true })).toEqual({
+      kind: 'lookup-client',
+    });
   });
 
   it('only price editing is active → edit-price', () => {
@@ -177,5 +192,24 @@ describe('parseGeoInput', () => {
     ).toBeNull();
     expect(parseGeoInput('5')).toBeNull();
     expect(parseGeoInput('привіт')).toBeNull();
+  });
+});
+
+describe('phoneSearchToken', () => {
+  it('returns the last up to 9 digits, ignoring formatting', () => {
+    expect(phoneSearchToken('+380501234567')).toBe('501234567');
+    expect(phoneSearchToken('0501234567')).toBe('501234567');
+    expect(phoneSearchToken('501234567')).toBe('501234567');
+    expect(phoneSearchToken('+38 (050) 123-45-67')).toBe('501234567');
+  });
+
+  it('a short fragment (>= 5 digits) is kept as is', () => {
+    expect(phoneSearchToken('34567')).toBe('34567');
+  });
+
+  it('too few digits → null', () => {
+    expect(phoneSearchToken('1234')).toBeNull();
+    expect(phoneSearchToken('абв')).toBeNull();
+    expect(phoneSearchToken('')).toBeNull();
   });
 });

@@ -101,6 +101,16 @@ export class OrdersService {
     return last?.bottles ?? null;
   }
 
+  /**
+   * Water price per bottle by the current grid for a given quantity (for the driver
+   * hand-off line). Delegates to PricingService (the single source of truth) with the
+   * current PriceSettings — informational, so it uses live prices, not the frozen total.
+   */
+  async waterUnitPrice(bottles: number): Promise<number> {
+    const prices = await this.pricingSettings.getCurrent();
+    return this.pricing.waterUnitPrice(bottles, prices);
+  }
+
   /** Order with client and address — for redrawing the dispatcher's message (SPEC §7). */
   getOrderView(id: string): Promise<OrderWithRelations | null> {
     return this.prisma.order.findUnique({

@@ -10,13 +10,15 @@ import type { EditablePriceField } from '../../modules/pricing-settings/pricing-
 export const BTN_ORDERS = '📋 Активні';
 export const BTN_PRICES = '💰 Ціни';
 export const BTN_STATS = '📊 Статистика';
+export const BTN_CLIENT = '🔎 Клієнт';
 
 /** Intent the incoming dispatcher text reduces to. Execution — in the handler. */
 export type DispatcherTextIntent =
-  | { kind: 'menu'; action: 'orders' | 'prices' | 'stats' }
+  | { kind: 'menu'; action: 'orders' | 'prices' | 'stats' | 'client' }
   | { kind: 'edit-quantity'; orderId: string }
   | { kind: 'edit-claim'; orderId: string }
   | { kind: 'set-geo'; orderId: string }
+  | { kind: 'lookup-client' }
   | { kind: 'edit-price'; field: EditablePriceField }
   | { kind: 'ignore' };
 
@@ -27,6 +29,8 @@ export interface DispatcherInputState {
   editingClaimOrderId?: string;
   /** Attaching delivery coordinates to an order's address (geo-tagging). */
   geoTaggingOrderId?: string;
+  /** Awaiting a phone number to look a client up (🔎 Клієнт). */
+  lookupClient?: boolean;
   editingPriceField?: EditablePriceField;
 }
 
@@ -48,6 +52,8 @@ export function routeDispatcherText(
       return { kind: 'menu', action: 'prices' };
     case BTN_STATS:
       return { kind: 'menu', action: 'stats' };
+    case BTN_CLIENT:
+      return { kind: 'menu', action: 'client' };
     default:
       break;
   }
@@ -59,6 +65,9 @@ export function routeDispatcherText(
   }
   if (state.geoTaggingOrderId) {
     return { kind: 'set-geo', orderId: state.geoTaggingOrderId };
+  }
+  if (state.lookupClient) {
+    return { kind: 'lookup-client' };
   }
   if (state.editingPriceField) {
     return { kind: 'edit-price', field: state.editingPriceField };
@@ -91,6 +100,18 @@ export function parsePriceValue(text: string): ParseResult {
     return { ok: false };
   }
   return { ok: true, value };
+}
+
+/**
+ * Reduces a dispatcher-typed phone to a search token: digits only, the last up to 9
+ * (the subscriber part, so `0501234567` / `+380501234567` / `501234567` all match a
+ * stored `+380501234567` via a substring search). Too few digits (< 5) → null (the
+ * handler asks again, avoids matching half the base). Pure — DB search is the handler's.
+ */
+export function phoneSearchToken(raw: string): string | null {
+  const digits = raw.replace(/\D/g, '');
+  if (digits.length < 5) return null;
+  return digits.slice(-9);
 }
 
 /** Parsed geo coordinates, or null when the text is not recognised. */

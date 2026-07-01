@@ -51,6 +51,9 @@ export const texts = {
     'Схоже, ви замовляєте вперше 👋 Вкажіть адресу доставки: вулиця, будинок, ' +
     'квартира. Якщо є — додайте поверх, код домофона, орієнтир.',
 
+  /** Changing an EXISTING address (standalone management or editing on Confirm). */
+  changeAddress: 'Введіть нову адресу доставки: вулиця, будинок, квартира.',
+
   /** AWAIT_COMMENT — address details (floor/intercom/landmark), optional. */
   awaitComment:
     'Додайте деталі до адреси: поверх, код домофона, орієнтир — або натисніть ' +
@@ -206,6 +209,15 @@ export const texts = {
       'Оплата готівкою водієві.'
     );
   },
+
+  /** "📍 Моя адреса" — the saved default address (with a change button). */
+  addressView(address: Address): string {
+    const comment = address.comment ? `\n📝 ${address.comment}` : '';
+    return `📍 Ваша адреса доставки:\n${address.raw}${comment}`;
+  },
+
+  /** Confirmation after the client saved/changed the address standalone. */
+  addressSaved: 'Адресу збережено ✅',
 
   /** CONTACTS — support phone (SPEC §6, "Contact us"; §11 — placeholder). */
   contacts(phone: string): string {
