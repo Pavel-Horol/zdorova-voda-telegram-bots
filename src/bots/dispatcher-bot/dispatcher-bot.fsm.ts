@@ -32,6 +32,7 @@ export type DispatcherTextIntent =
   | { kind: 'set-delivery-note'; orderId: string }
   | { kind: 'lookup-client' }
   | { kind: 'add-contact' }
+  | { kind: 'add-dispatcher' }
   | { kind: 'edit-price'; field: EditablePriceField }
   | { kind: 'ignore' };
 
@@ -49,6 +50,8 @@ export interface DispatcherInputState {
   lookupClient?: boolean;
   /** Awaiting a new support phone to add to the contact list (📞 Контакти → ➕). */
   addingContact?: boolean;
+  /** Awaiting a chat id (+ optional label) to add a dispatcher (/dispatchers → ➕). */
+  addingDispatcher?: boolean;
   editingPriceField?: EditablePriceField;
 }
 
@@ -99,6 +102,9 @@ export function routeDispatcherText(
   if (state.addingContact) {
     return { kind: 'add-contact' };
   }
+  if (state.addingDispatcher) {
+    return { kind: 'add-dispatcher' };
+  }
   if (state.editingPriceField) {
     return { kind: 'edit-price', field: state.editingPriceField };
   }
@@ -142,6 +148,51 @@ export function phoneSearchToken(raw: string): string | null {
   const digits = raw.replace(/\D/g, '');
   if (digits.length < 5) return null;
   return digits.slice(-9);
+}
+
+/** A parsed "add dispatcher" line: the Telegram chat id and an optional label. */
+export type DispatcherInput = { chatId: string; label: string | null };
+
+/**
+ * Parses the super-admin's "add dispatcher" input: the first whitespace-delimited token
+ * is the Telegram chat id (an integer, negative for group chats), the rest is an optional
+ * free-text label. Rejects a non-integer id (null → the handler asks to re-enter), so a
+ * mistyped id can't admit a wrong chat. The label is trimmed; empty → null.
+ */
+export function parseDispatcherInput(raw: string): DispatcherInput | null {
+  const text = raw.trim();
+  if (!text) return null;
+  const sep = text.search(/\s/);
+  const idPart = sep === -1 ? text : text.slice(0, sep);
+  const labelPart = sep === -1 ? '' : text.slice(sep + 1).trim();
+  if (!/^-?\d+$/.test(idPart)) return null;
+  return { chatId: idPart, label: labelPart || null };
+}
+
+/** The subset of a Telegram getChat result we build a dispatcher label from. */
+export interface ChatInfo {
+  first_name?: string;
+  last_name?: string;
+  username?: string;
+  /** Set for group / channel chats (private chats have first_name instead). */
+  title?: string;
+}
+
+/**
+ * Builds a human label from a getChat result (pure — unit-tested), so the super-admin
+ * only types the chat id and the name is pulled automatically. A group/channel uses its
+ * title; a private chat uses "First Last" (+ @username when present), or just @username,
+ * or null when Telegram exposed nothing usable (the id alone is then shown in the list).
+ */
+export function formatChatTitle(chat: ChatInfo): string | null {
+  if (chat.title?.trim()) return chat.title.trim();
+  const name = [chat.first_name, chat.last_name]
+    .filter((p): p is string => !!p?.trim())
+    .join(' ')
+    .trim();
+  if (name) return chat.username ? `${name} (@${chat.username})` : name;
+  if (chat.username?.trim()) return `@${chat.username.trim()}`;
+  return null;
 }
 
 /** Parsed geo coordinates, or null when the text is not recognised. */

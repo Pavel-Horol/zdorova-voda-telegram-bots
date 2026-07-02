@@ -6,6 +6,7 @@ import type {
   Address,
   PriceSettings,
   ContactPhone,
+  Dispatcher,
 } from '../../../generated/prisma/client';
 import type { EditablePriceField } from '../../modules/pricing-settings/pricing-settings.service';
 
@@ -177,6 +178,7 @@ export const dispatcherHelp =
   '/stats — статистика за замовленнями\n' +
   '/client — знайти клієнта за номером телефону\n' +
   '/contacts — телефони підтримки, які бачить клієнт\n' +
+  '/dispatchers — керування диспетчерами (лише супер-адмін)\n' +
   '/help — ця довідка';
 
 /**
@@ -219,6 +221,68 @@ export const addContactPrompt =
 /** New support phone was not recognised — ask again with an example. */
 export const contactAddInvalid =
   'Не розпізнав номер. Введіть у форматі +380501234567 або 0501234567.';
+
+/**
+ * Dispatcher list for the super-admin (/dispatchers). The env super-admin chat is NOT
+ * listed here — it is always active and unremovable; only the extra DB dispatchers are
+ * managed. Active rows receive order notifications and pass the chat guard; hidden ones
+ * are kept but excluded from both.
+ */
+export function dispatchersListMessage(dispatchers: Dispatcher[]): string {
+  const head = '👥 Диспетчери\n\n';
+  const footer =
+    '\n\nВи (супер-адмін) завжди в списку й керуєте ним.\n' +
+    '✅ — отримує замовлення, 🙈 — вимкнений.';
+  if (!dispatchers.length) {
+    return (
+      head +
+      'Додаткових диспетчерів ще немає.\n' +
+      'Додайте кнопкою нижче — знадобиться chat_id людини 👇' +
+      footer
+    );
+  }
+  const lines = dispatchers.map((d) => {
+    const label = d.label ? ` — ${d.label}` : '';
+    return `${d.active ? '✅' : '🙈'} ${d.chatId}${label}`;
+  });
+  return head + lines.join('\n') + footer;
+}
+
+/** Per-dispatcher management buttons (toggle on/off, delete) + add. */
+export function dispatchersKeyboard(dispatchers: Dispatcher[]): InlineKeyboard {
+  const kb = new InlineKeyboard();
+  for (const d of dispatchers) {
+    const name = d.label ?? d.chatId;
+    const toggle = d.active ? `🙈 ${name}` : `✅ ${name}`;
+    kb.text(toggle, `dp:tgl:${d.id}`).text('🗑', `dp:del:${d.id}`).row();
+  }
+  kb.text('➕ Додати диспетчера', 'dp:add');
+  return kb;
+}
+
+/** Prompt for a new dispatcher (/dispatchers → ➕): chat id (name is pulled automatically). */
+export const addDispatcherPrompt =
+  'Надішліть chat_id диспетчера (число) — ім’я підтягнеться автоматично.\n' +
+  'За бажанням можна вказати своє ім’я через пробіл: 626688964 Іван\n\n' +
+  '⚠️ Спочатку ця людина має написати боту /start — інакше замовлення їй не дійдуть ' +
+  '(так працює Telegram). chat_id вона може дізнатись у @userinfobot.';
+
+/** New dispatcher input was not recognised — ask again with an example. */
+export const dispatcherAddInvalid =
+  'Не розпізнав chat_id. Перший елемент має бути числом, напр.: 626688964 Іван.';
+
+/**
+ * Appended to the "added" confirmation when getChat could not fetch the person's data —
+ * almost always because they have not started the bot yet, which ALSO means order
+ * notifications won't reach them until they do. Surfaced so it's not a silent trap.
+ */
+export const dispatcherFetchFailedNote =
+  '⚠️ Не вдалося отримати дані цього chat_id. Схоже, людина ще не написала боту /start — ' +
+  'поки не напише, замовлення їй не надходитимуть.';
+
+/** Only the super-admin may manage the dispatcher list (shown to anyone else). */
+export const dispatchersForbidden =
+  'Керувати списком диспетчерів може лише супер-адмін.';
 
 /**
  * Commands for the Telegram menu ("/"). Registered via setMyCommands at startup —

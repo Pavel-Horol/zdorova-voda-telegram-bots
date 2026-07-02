@@ -8,18 +8,13 @@ import type { OrderEditField } from './dispatcher-bot.fsm';
 export const DISPATCHER_BOT = Symbol('DISPATCHER_BOT');
 
 /**
- * Configured dispatcher chat IDs (DISPATCHER_CHAT_ID + DISPATCHER2_CHAT_ID).
- * Order notifications are sent to all of them; the chat guard admits all of them.
- * Empty/missing values are dropped and duplicates removed. Add more numbered vars
- * here to support further dispatchers.
+ * The super-admin dispatcher chat id from env (DISPATCHER_CHAT_ID). It is always
+ * admitted and always notified, and is the only chat allowed to manage the dispatcher
+ * list (/dispatchers). Additional dispatchers live in the DB (DispatchersService) — the
+ * full allowed set is env-admin ∪ active rows (see DispatchersService.allowedChatIds).
  */
-export function dispatcherChatIds(config: ConfigService): string[] {
-  const raw = [
-    config.get<string>('DISPATCHER_CHAT_ID'),
-    config.get<string>('DISPATCHER2_CHAT_ID'),
-  ];
-  const ids = raw.map((v) => v?.trim()).filter((v): v is string => !!v);
-  return [...new Set(ids)];
+export function superAdminChatId(config: ConfigService): string | undefined {
+  return config.get<string>('DISPATCHER_CHAT_ID')?.trim() || undefined;
 }
 
 /**
@@ -40,6 +35,8 @@ export interface DispatcherSession {
   lookupClient?: boolean;
   /** awaiting a new support phone to add to the contact list (📞 Контакти → ➕). */
   addingContact?: boolean;
+  /** awaiting a chat id (+ optional label) to add a dispatcher (/dispatchers → ➕). */
+  addingDispatcher?: boolean;
 }
 
 export type DispatcherContext = Context & SessionFlavor<DispatcherSession>;

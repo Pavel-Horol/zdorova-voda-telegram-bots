@@ -4,6 +4,8 @@ import {
   BTN_ORDERS,
   BTN_PRICES,
   BTN_STATS,
+  formatChatTitle,
+  parseDispatcherInput,
   parseEditedQuantity,
   parseGeoInput,
   parsePriceValue,
@@ -139,8 +141,68 @@ describe('routeDispatcherText', () => {
     });
   });
 
+  it('only adding-dispatcher is active → add-dispatcher', () => {
+    expect(
+      routeDispatcherText('626688964 Іван', { addingDispatcher: true }),
+    ).toEqual({ kind: 'add-dispatcher' });
+  });
+
   it('neither a button nor an active mode → ignore', () => {
     expect(routeDispatcherText('привіт', noMode)).toEqual({ kind: 'ignore' });
+  });
+});
+
+describe('parseDispatcherInput', () => {
+  it('parses a bare chat id with no label', () => {
+    expect(parseDispatcherInput('626688964')).toEqual({
+      chatId: '626688964',
+      label: null,
+    });
+  });
+
+  it('splits off a free-text label after the id', () => {
+    expect(parseDispatcherInput('  626688964   Іван Диспетчер ')).toEqual({
+      chatId: '626688964',
+      label: 'Іван Диспетчер',
+    });
+  });
+
+  it('accepts a negative (group) chat id', () => {
+    expect(parseDispatcherInput('-1001234567890 Склад')).toEqual({
+      chatId: '-1001234567890',
+      label: 'Склад',
+    });
+  });
+
+  it('rejects a non-integer id and empty input', () => {
+    expect(parseDispatcherInput('Іван 626688964')).toBeNull();
+    expect(parseDispatcherInput('12.5')).toBeNull();
+    expect(parseDispatcherInput('')).toBeNull();
+  });
+});
+
+describe('formatChatTitle', () => {
+  it('uses the group/channel title when present', () => {
+    expect(formatChatTitle({ title: 'Склад №2', first_name: 'x' })).toBe(
+      'Склад №2',
+    );
+  });
+
+  it('joins first + last name for a private chat', () => {
+    expect(formatChatTitle({ first_name: 'Іван', last_name: 'Петренко' })).toBe(
+      'Іван Петренко',
+    );
+  });
+
+  it('appends @username to the name when both are present', () => {
+    expect(formatChatTitle({ first_name: 'Іван', username: 'ivan' })).toBe(
+      'Іван (@ivan)',
+    );
+  });
+
+  it('falls back to @username, then to null', () => {
+    expect(formatChatTitle({ username: 'ivan' })).toBe('@ivan');
+    expect(formatChatTitle({})).toBeNull();
   });
 });
 

@@ -3,6 +3,7 @@ import { OrdersService } from './orders.service';
 import { ClientsModule } from '../clients/clients.module';
 import { PricingModule } from '../pricing/pricing.module';
 import { PricingSettingsModule } from '../pricing-settings/pricing-settings.module';
+import { DispatchersModule } from '../dispatchers/dispatchers.module';
 import {
   ORDER_DISPATCHER,
   LogOrderDispatcher,
@@ -15,6 +16,7 @@ import { DispatcherBotCoreModule } from '../../bots/dispatcher-bot/dispatcher-bo
     ClientsModule,
     PricingModule,
     PricingSettingsModule,
+    DispatchersModule,
     DispatcherBotCoreModule,
   ],
   providers: [

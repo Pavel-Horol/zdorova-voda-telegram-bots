@@ -17,9 +17,10 @@ import {
   type EditablePriceField,
 } from '../../modules/pricing-settings/pricing-settings.service';
 import { ContactsService } from '../../modules/contacts/contacts.service';
+import { DispatchersService } from '../../modules/dispatchers/dispatchers.service';
 import {
   DISPATCHER_BOT,
-  dispatcherChatIds,
+  superAdminChatId,
   type DispatcherBot,
   type DispatcherContext,
   type DispatcherSession,
@@ -27,11 +28,17 @@ import {
 import {
   activeOrdersHeader,
   addContactPrompt,
+  addDispatcherPrompt,
   contactAddInvalid,
   contactsKeyboard,
   contactsListMessage,
+  dispatcherAddInvalid,
   dispatcherCommands,
+  dispatcherFetchFailedNote,
   dispatcherHelp,
+  dispatchersForbidden,
+  dispatchersKeyboard,
+  dispatchersListMessage,
   clientCardMessage,
   clientLookupPrompt,
   deliveryEtaAcceptNudge,
@@ -66,6 +73,8 @@ import {
   BTN_PRICES,
   BTN_STATS,
   type OrderEditField,
+  formatChatTitle,
+  parseDispatcherInput,
   parseEditedQuantity,
   parseGeoInput,
   parsePriceValue,
@@ -104,6 +113,7 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
     private readonly pricingSettings: PricingSettingsService,
     private readonly contacts: ContactsService,
     private readonly clients: ClientsService,
+    private readonly dispatchers: DispatchersService,
   ) {}
 
   onModuleInit(): void {
@@ -142,14 +152,26 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
     await this.bot?.stop();
   }
 
-  /** Let through updates only from a configured dispatcher chat (if any are set). */
+  /**
+   * Let through updates only from an allowed dispatcher chat: the env super-admin ∪
+   * active DB dispatchers. Queried per update (the table is tiny) so a just-added
+   * dispatcher is admitted immediately. With nothing configured (no admin, empty DB)
+   * the guard admits all — a partial local run stays possible.
+   */
   private useChatGuard(bot: DispatcherBot): void {
-    const allowed = dispatcherChatIds(this.config);
-    if (!allowed.length) return;
+    const adminChatId = superAdminChatId(this.config);
     bot.use(async (ctx, next) => {
-      if (ctx.chat && !allowed.includes(String(ctx.chat.id))) return;
+      const allowed = await this.dispatchers.allowedChatIds(adminChatId);
+      if (allowed.length && ctx.chat && !allowed.includes(String(ctx.chat.id)))
+        return;
       await next();
     });
+  }
+
+  /** True only for the env super-admin chat — the sole manager of the dispatcher list. */
+  private isSuperAdmin(ctx: DispatcherContext): boolean {
+    const admin = superAdminChatId(this.config);
+    return !!admin && !!ctx.chat && String(ctx.chat.id) === admin;
   }
 
   private registerHandlers(bot: DispatcherBot): void {
@@ -160,6 +182,7 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
     bot.command('stats', (ctx) => this.onStats(ctx));
     bot.command('client', (ctx) => this.onClientLookupStart(ctx));
     bot.command('contacts', (ctx) => this.onContacts(ctx));
+    bot.command('dispatchers', (ctx) => this.onDispatchers(ctx));
     bot.callbackQuery(/^acc:(.+)$/, (ctx) => this.onTransition(ctx, 'accept'));
     bot.callbackQuery(/^del:(.+)$/, (ctx) => this.onTransition(ctx, 'deliver'));
     bot.callbackQuery(/^can:(.+)$/, (ctx) => this.onTransition(ctx, 'cancel'));
@@ -180,6 +203,9 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
     bot.callbackQuery('ct:add', (ctx) => this.onAddContactStart(ctx));
     bot.callbackQuery(/^ct:tgl:(.+)$/, (ctx) => this.onToggleContact(ctx));
     bot.callbackQuery(/^ct:del:(.+)$/, (ctx) => this.onDeleteContact(ctx));
+    bot.callbackQuery('dp:add', (ctx) => this.onAddDispatcherStart(ctx));
+    bot.callbackQuery(/^dp:tgl:(.+)$/, (ctx) => this.onToggleDispatcher(ctx));
+    bot.callbackQuery(/^dp:del:(.+)$/, (ctx) => this.onDeleteDispatcher(ctx));
     bot.callbackQuery('pe_cancel', (ctx) => this.onCancelPriceEdit(ctx));
     bot.callbackQuery(
       /^pe:(price1|priceFrom2|priceFrom6|depositPerBottle|pumpPrice|electroPumpPrice|waterStartPrice)$/,
@@ -280,6 +306,7 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
     ctx.session.deliveryNoteOrderId = undefined;
     ctx.session.lookupClient = undefined;
     ctx.session.addingContact = undefined;
+    ctx.session.addingDispatcher = undefined;
     const prices = await this.pricingSettings.getCurrent();
     await ctx.reply(pricesMessage(prices), { reply_markup: pricesKeyboard() });
   }
@@ -295,6 +322,7 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
     ctx.session.deliveryNoteOrderId = undefined;
     ctx.session.lookupClient = undefined;
     ctx.session.addingContact = undefined;
+    ctx.session.addingDispatcher = undefined;
     ctx.session.editingPriceField = field;
     await ctx.reply(
       `Введіть нове значення для «${priceFieldLabel(field)}» (ціле число грн):`,
@@ -336,6 +364,7 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
     ctx.session.deliveryNoteOrderId = undefined;
     ctx.session.lookupClient = undefined;
     ctx.session.addingContact = undefined;
+    ctx.session.addingDispatcher = undefined;
     ctx.session.editingOrder = { id, field };
     const prompt =
       field === 'qty'
@@ -369,6 +398,7 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
     ctx.session.deliveryNoteOrderId = undefined;
     ctx.session.lookupClient = undefined;
     ctx.session.addingContact = undefined;
+    ctx.session.addingDispatcher = undefined;
     ctx.session.editingClaimOrderId = id;
     await ctx.reply(editClaimPrompt(id));
   }
@@ -388,6 +418,7 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
     ctx.session.deliveryNoteOrderId = undefined;
     ctx.session.lookupClient = undefined;
     ctx.session.addingContact = undefined;
+    ctx.session.addingDispatcher = undefined;
     ctx.session.geoTaggingOrderId = id;
     await ctx.reply(geoTagPrompt(id));
   }
@@ -440,6 +471,7 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
     ctx.session.geoTaggingOrderId = undefined;
     ctx.session.lookupClient = undefined;
     ctx.session.addingContact = undefined;
+    ctx.session.addingDispatcher = undefined;
     ctx.session.deliveryNoteOrderId = id;
     await ctx.editMessageText(deliveryEtaCustomPrompt(id));
   }
@@ -462,6 +494,7 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
     ctx.session.geoTaggingOrderId = undefined;
     ctx.session.deliveryNoteOrderId = undefined;
     ctx.session.addingContact = undefined;
+    ctx.session.addingDispatcher = undefined;
     const arg = ctx.match;
     const query = typeof arg === 'string' ? arg.trim() : '';
     if (query) {
@@ -563,6 +596,10 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
       case 'add-contact':
         // New support phone typed after "📞 Контакти → ➕".
         await this.applyAddContact(ctx, text);
+        return;
+      case 'add-dispatcher':
+        // chat_id (+ optional label) typed after "/dispatchers → ➕" (super-admin only).
+        await this.applyAddDispatcher(ctx, text);
         return;
       case 'edit-order':
         // New value for the picked field of an order (✏️ Edit) — priority over price.
@@ -765,6 +802,7 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
     ctx.session.deliveryNoteOrderId = undefined;
     ctx.session.lookupClient = undefined;
     ctx.session.addingContact = undefined;
+    ctx.session.addingDispatcher = undefined;
     const contacts = await this.contacts.listAll();
     await ctx.reply(contactsListMessage(contacts), {
       reply_markup: contactsKeyboard(contacts),
@@ -780,6 +818,7 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
     ctx.session.geoTaggingOrderId = undefined;
     ctx.session.deliveryNoteOrderId = undefined;
     ctx.session.lookupClient = undefined;
+    ctx.session.addingDispatcher = undefined;
     ctx.session.addingContact = true;
     await ctx.editMessageText(addContactPrompt);
   }
@@ -800,6 +839,7 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
       return;
     }
     ctx.session.addingContact = undefined;
+    ctx.session.addingDispatcher = undefined;
     const contacts = await this.contacts.listAll();
     await ctx.reply(`Додано ✅\n\n${contactsListMessage(contacts)}`, {
       reply_markup: contactsKeyboard(contacts),
@@ -851,6 +891,138 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
     try {
       await ctx.editMessageText(contactsListMessage(contacts), {
         reply_markup: contactsKeyboard(contacts),
+      });
+    } catch {
+      // Message too old / unchanged — the toast already reflected the action.
+    }
+  }
+
+  /**
+   * /dispatchers — manage the extra dispatcher chats (the env super-admin is always in,
+   * unlisted and unremovable). Super-admin only: a regular dispatcher gets a refusal, so
+   * the list of who has access can't be changed by anyone but the owner. Cancels any
+   * pending input (like /prices) and shows the list.
+   */
+  private async onDispatchers(ctx: DispatcherContext): Promise<void> {
+    if (!this.isSuperAdmin(ctx)) {
+      await ctx.reply(dispatchersForbidden);
+      return;
+    }
+    ctx.session.editingPriceField = undefined;
+    ctx.session.editingOrder = undefined;
+    ctx.session.editingClaimOrderId = undefined;
+    ctx.session.geoTaggingOrderId = undefined;
+    ctx.session.deliveryNoteOrderId = undefined;
+    ctx.session.lookupClient = undefined;
+    ctx.session.addingContact = undefined;
+    ctx.session.addingDispatcher = undefined;
+    const dispatchers = await this.dispatchers.listAll();
+    await ctx.reply(dispatchersListMessage(dispatchers), {
+      reply_markup: dispatchersKeyboard(dispatchers),
+    });
+  }
+
+  /** "➕ Додати диспетчера": wait for a chat id (+ optional label) as text. */
+  private async onAddDispatcherStart(ctx: DispatcherContext): Promise<void> {
+    await ctx.answerCallbackQuery();
+    if (!this.isSuperAdmin(ctx)) return;
+    ctx.session.editingPriceField = undefined; // input modes are mutually exclusive
+    ctx.session.editingOrder = undefined;
+    ctx.session.editingClaimOrderId = undefined;
+    ctx.session.geoTaggingOrderId = undefined;
+    ctx.session.deliveryNoteOrderId = undefined;
+    ctx.session.lookupClient = undefined;
+    ctx.session.addingContact = undefined;
+    ctx.session.addingDispatcher = true;
+    await ctx.editMessageText(addDispatcherPrompt);
+  }
+
+  /**
+   * chat_id (+ optional label) typed (/dispatchers → ➕): parse, pull the person's name
+   * via getChat (so the super-admin only needs the id), save, then show the refreshed
+   * list. A typed label overrides the fetched name. A failed fetch usually means the
+   * person hasn't started the bot (so orders won't reach them) — flagged, not hidden.
+   * An unparseable id keeps the input mode and asks again. Guarded by super-admin again.
+   */
+  private async applyAddDispatcher(
+    ctx: DispatcherContext,
+    text: string,
+  ): Promise<void> {
+    if (!this.isSuperAdmin(ctx)) {
+      ctx.session.addingDispatcher = undefined;
+      return;
+    }
+    const parsed = parseDispatcherInput(text);
+    if (!parsed) {
+      // stay in adding mode and ask again.
+      await ctx.reply(dispatcherAddInvalid);
+      return;
+    }
+    let fetched: string | null = null;
+    let fetchFailed = false;
+    if (this.bot) {
+      try {
+        fetched = formatChatTitle(await this.bot.api.getChat(parsed.chatId));
+      } catch {
+        // Unknown chat — most likely the person never started the bot (see note below).
+        fetchFailed = true;
+      }
+    }
+    await this.dispatchers.add(parsed.chatId, parsed.label ?? fetched);
+    ctx.session.addingDispatcher = undefined;
+    const dispatchers = await this.dispatchers.listAll();
+    const note = fetchFailed ? `\n\n${dispatcherFetchFailedNote}` : '';
+    await ctx.reply(
+      `Додано ✅${note}\n\n${dispatchersListMessage(dispatchers)}`,
+      { reply_markup: dispatchersKeyboard(dispatchers) },
+    );
+  }
+
+  /** "🙈/✅" on a dispatcher: toggle whether they get orders; redraw the list in place. */
+  private async onToggleDispatcher(ctx: DispatcherContext): Promise<void> {
+    const id = ctx.match?.[1];
+    if (!id || !this.isSuperAdmin(ctx)) {
+      await ctx.answerCallbackQuery();
+      return;
+    }
+    const dispatchers = await this.dispatchers.listAll();
+    const target = dispatchers.find((d) => d.id === id);
+    if (!target) {
+      await ctx.answerCallbackQuery({ text: 'Диспетчера не знайдено' });
+      await this.redrawDispatchers(ctx, dispatchers);
+      return;
+    }
+    await this.dispatchers.setActive(id, !target.active);
+    await ctx.answerCallbackQuery({
+      text: target.active ? 'Вимкнено' : 'Увімкнено',
+    });
+    await this.redrawDispatchers(ctx, await this.dispatchers.listAll());
+  }
+
+  /** "🗑" on a dispatcher: delete it; redraw the list in place. */
+  private async onDeleteDispatcher(ctx: DispatcherContext): Promise<void> {
+    const id = ctx.match?.[1];
+    if (!id || !this.isSuperAdmin(ctx)) {
+      await ctx.answerCallbackQuery();
+      return;
+    }
+    try {
+      await this.dispatchers.remove(id);
+    } catch {
+      // Already gone — fall through to a redraw with the current list.
+    }
+    await ctx.answerCallbackQuery({ text: 'Видалено' });
+    await this.redrawDispatchers(ctx, await this.dispatchers.listAll());
+  }
+
+  /** Redraws the dispatchers message in place (edit), swallowing a too-old-to-edit error. */
+  private async redrawDispatchers(
+    ctx: DispatcherContext,
+    dispatchers: Awaited<ReturnType<DispatchersService['listAll']>>,
+  ): Promise<void> {
+    try {
+      await ctx.editMessageText(dispatchersListMessage(dispatchers), {
+        reply_markup: dispatchersKeyboard(dispatchers),
       });
     } catch {
       // Message too old / unchanged — the toast already reflected the action.

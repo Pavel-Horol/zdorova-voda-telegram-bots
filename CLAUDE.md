@@ -47,6 +47,7 @@ src/
     pricing/                 # pricing.service.ts — ЕДИНСТВЕННОЕ место расчёта суммы (+ .spec)
     pricing-settings/        # чтение/редактирование цен (+ .spec)
     contacts/                # телефоны поддержки (ContactPhone), правит диспетчер (+ .spec)
+    dispatchers/             # доп. диспетчеры (Dispatcher), правит супер-админ в боте (+ .spec)
   bots/
     client-bot/
       client-bot.service.ts  # grammY-инстанс №1: весь FSM клиента, ручной (НЕ scenes)
@@ -152,8 +153,9 @@ npm run lint                # eslint --fix
 DATABASE_URL=postgresql://...
 CLIENT_BOT_TOKEN=...
 DISPATCHER_BOT_TOKEN=...
-DISPATCHER_CHAT_ID=...        # куда слать уведомления о заказах
-DISPATCHER2_CHAT_ID=...       # второй диспетчер (опц.): заказы уходят в оба чата, оба проходят chat-guard
+DISPATCHER_CHAT_ID=...        # супер-админ: всегда получает заказы, проходит chat-guard
+                             # и ЕДИНСТВЕННЫЙ правит список диспетчеров (/dispatchers).
+                             # Остальные диспетчеры — в БД (модель Dispatcher), правятся в боте.
 SUPPORT_PHONE=+380XXXXXXXXX   # ОБЯЗАТЕЛЕН: резерв для «Связаться». С заглушкой (X) или
                               # пустым приложение НЕ стартует (fatal-проверка в main.ts).
                               # Основные номера диспетчер правит в боте (/contacts, ContactPhone).

@@ -129,6 +129,21 @@ model ContactPhone {
   createdAt DateTime @default(now())
 }
 
+/// A dispatcher chat allowed to run the dispatcher bot and receive order notifications.
+/// The super-admin chat (env DISPATCHER_CHAT_ID) is NOT stored here — it is always
+/// admitted and manages this list from the bot (/dispatchers). The allowed set is the
+/// union of that env id and the `active` rows here; `active=false` keeps the row but
+/// stops both admission and notifications. See dispatchers.service.
+model Dispatcher {
+  id        String   @id @default(uuid())
+  /// Telegram chat id as a string (may be negative for group chats). Unique.
+  chatId    String   @unique
+  /// Optional human label the super-admin typed (e.g. a name), for the management list.
+  label     String?
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+}
+
 /// Price settings — a singleton (one row for the whole system).
 /// id is always = 1; the seed creates the row with defaults (PRODUCT.md "Pricing").
 model PriceSettings {

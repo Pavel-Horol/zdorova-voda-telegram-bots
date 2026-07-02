@@ -3,9 +3,10 @@ import { ConfigService } from '@nestjs/config';
 import type { InlineKeyboard } from 'grammy';
 import type { Order, Client, Address } from '../../../generated/prisma/client';
 import type { OrderDispatcher } from '../shared/order-dispatcher';
+import { DispatchersService } from '../../modules/dispatchers/dispatchers.service';
 import {
   DISPATCHER_BOT,
-  dispatcherChatIds,
+  superAdminChatId,
   type DispatcherBot,
 } from './dispatcher-bot.bot';
 import {
@@ -17,8 +18,8 @@ import {
 
 /**
  * Telegram implementation of OrderDispatcher (SPEC §7): sends a new-order
- * notification to every configured dispatcher chat (DISPATCHER_CHAT_ID +
- * DISPATCHER2_CHAT_ID) with inline status buttons. Uses the shared bot instance
+ * notification to every allowed dispatcher chat (env super-admin ∪ active DB
+ * dispatchers) with inline status buttons. Uses the shared bot instance
  * (DISPATCHER_BOT) only for sending; button handling — in DispatcherBotService.
  *
  * Each dispatcher gets its own copy of the message: when one acts on an order, only
@@ -32,6 +33,7 @@ export class TelegramOrderDispatcher implements OrderDispatcher {
 
   constructor(
     private readonly config: ConfigService,
+    private readonly dispatchers: DispatchersService,
     @Inject(DISPATCHER_BOT) private readonly bot: DispatcherBot | null,
   ) {}
 
@@ -70,7 +72,9 @@ export class TelegramOrderDispatcher implements OrderDispatcher {
     context: string,
     keyboard?: InlineKeyboard,
   ): Promise<void> {
-    const chatIds = dispatcherChatIds(this.config);
+    const chatIds = await this.dispatchers.allowedChatIds(
+      superAdminChatId(this.config),
+    );
     if (!this.bot || !chatIds.length) {
       this.logger.warn(
         `DISPATCHER_BOT/CHAT_ID not configured — ${context} not sent`,

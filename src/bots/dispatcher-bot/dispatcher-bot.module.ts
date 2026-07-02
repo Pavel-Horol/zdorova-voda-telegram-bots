@@ -3,6 +3,7 @@ import { ClientsModule } from '../../modules/clients/clients.module';
 import { OrdersModule } from '../../modules/orders/orders.module';
 import { PricingSettingsModule } from '../../modules/pricing-settings/pricing-settings.module';
 import { ContactsModule } from '../../modules/contacts/contacts.module';
+import { DispatchersModule } from '../../modules/dispatchers/dispatchers.module';
 import { DispatcherBotCoreModule } from './dispatcher-bot-core.module';
 import { DispatcherBotService } from './dispatcher-bot.service';
 
@@ -19,6 +20,7 @@ import { DispatcherBotService } from './dispatcher-bot.service';
     PricingSettingsModule,
     ContactsModule,
     ClientsModule,
+    DispatchersModule,
   ],
   providers: [DispatcherBotService],
 })
