@@ -35,7 +35,7 @@ export function priceFieldLabel(field: EditablePriceField): string {
 export const dispatcherWelcome =
   'Диспетчерський бот 🚰\n' +
   'Нові замовлення надходять сюди автоматично — обробляйте кнопками під ними.\n' +
-  'Меню нижче: активні замовлення, ціни та статистика.';
+  'Меню нижче: 📋 Активні, 💰 Ціни, 📊 Статистика, 🔎 Клієнт, 📞 Контакти.';
 
 /** Header of the active orders list (/orders). */
 export function activeOrdersHeader(count: number): string {
@@ -173,6 +173,8 @@ export function editClaimPrompt(orderId: string): string {
 export const dispatcherHelp =
   'Що вміє бот:\n' +
   '• Нові замовлення надходять автоматично — кнопки прямо під повідомленням.\n' +
+  '• Основне меню — кнопки внизу екрана: 📋 Активні, 💰 Ціни, 📊 Статистика, 🔎 Клієнт, 📞 Контакти.\n\n' +
+  'Ті самі дії доступні й командами:\n' +
   '/orders — активні замовлення (created/accepted) списком\n' +
   '/prices — переглянути та змінити ціни\n' +
   '/stats — статистика за замовленнями\n' +
@@ -285,15 +287,15 @@ export const dispatchersForbidden =
   'Керувати списком диспетчерів може лише супер-адмін.';
 
 /**
- * Commands for the Telegram menu ("/"). Registered via setMyCommands at startup —
- * the dispatcher sees hints without memorising the commands.
+ * Commands for the Telegram menu ("/"). Registered via setMyCommands at startup.
+ * The frequent navigation (orders/prices/stats/client/contacts) lives on the
+ * persistent reply menu instead — the single visible menu, mirroring the client bot.
+ * The "/" menu is kept only for what does NOT belong on that shared keyboard: the
+ * super-admin-only dispatcher management and the help reference. The typed commands
+ * (/orders etc.) still work — they are simply not duplicated as a second menu.
  */
 export const dispatcherCommands = [
-  { command: 'orders', description: '📋 Активні замовлення' },
-  { command: 'prices', description: '💰 Ціни' },
-  { command: 'stats', description: '📊 Статистика' },
-  { command: 'client', description: '🔎 Знайти клієнта за телефоном' },
-  { command: 'contacts', description: '📞 Телефони підтримки' },
+  { command: 'dispatchers', description: '👥 Диспетчери (супер-адмін)' },
   { command: 'help', description: '❓ Довідка' },
 ];
 
