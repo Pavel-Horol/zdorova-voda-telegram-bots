@@ -55,6 +55,16 @@ export function parseTaraCount(raw: string): number | null {
   return n;
 }
 
+/**
+ * Parses the own-bottles count choice from `callback_data` (`tara:<n>|more`). A digit
+ * button gives the count (validated like {@link parseTaraCount}); `more` means the
+ * client wants to type an arbitrary number. Untrusted input → null.
+ */
+export function parseTaraChoice(raw: string): number | 'more' | null {
+  if (raw === 'more') return 'more';
+  return parseTaraCount(raw);
+}
+
 /** Pump choice in the starter kit (STEP3 T5). */
 export type PumpChoice = 'std' | 'electro';
 

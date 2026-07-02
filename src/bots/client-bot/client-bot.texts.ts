@@ -46,13 +46,15 @@ export const texts = {
     return `${hello}\nЧим допоможемо?`;
   },
 
-  /** AWAIT_ADDRESS — first order (SPEC §6). */
+  /** AWAIT_ADDRESS — first order (SPEC §6). Details (floor/intercom) are asked next. */
   awaitAddress:
-    'Схоже, ви замовляєте вперше 👋 Вкажіть адресу доставки: вулиця, будинок, ' +
-    'квартира. Якщо є — додайте поверх, код домофона, орієнтир.',
+    'Схоже, ви замовляєте вперше 👋 Напишіть адресу доставки: вулиця, ' +
+    'будинок, квартира — напр.: Гагаріна, 12, кв. 5.',
 
   /** Changing an EXISTING address (standalone management or editing on Confirm). */
-  changeAddress: 'Введіть нову адресу доставки: вулиця, будинок, квартира.',
+  changeAddress:
+    'Введіть нову адресу доставки: вулиця, будинок, квартира — ' +
+    'напр.: Гагаріна, 12, кв. 5.',
 
   /** AWAIT_COMMENT — address details (floor/intercom/landmark), optional. */
   awaitComment:
@@ -69,15 +71,19 @@ export const texts = {
   onboarding:
     'Щоб порахувати правильно — що у вас уже є?\n\n' +
     '🆕 Стартовий комплект — потрібні бак, помпа та вода\n' +
-    '💧 У мене вже є баки (19 л) — і свої, і ваші; залог не платите\n' +
+    '💧 У мене вже є баки (19 л) — і свої, і ваші; заставу не платите\n' +
     '⚙️ Інше — попросити диспетчера передзвонити',
 
-  /** Number of bottles on hand (the "I already have bottles" branch → OWN_TARA). */
+  /** Number of bottles on hand — button screen (the "I already have bottles" branch → OWN_TARA). */
+  ownTaraChoose:
+    'Скільки у вас баків (19 л) на руках? На стільки порахуємо обмін.',
+
+  /** Number of bottles on hand — manual entry ("Інша кількість"). */
   ownTaraCount:
-    'Скільки у вас баків (19 л) на руках? Надішліть числом — на стільки порахуємо обмін.',
+    'Скільки у вас баків (19 л) на руках? Надішліть числом — напр.: 8.',
 
   /** Invalid number of bottles. */
-  ownTaraInvalid: 'Потрібне число від 1. Скільки у вас баків?',
+  ownTaraInvalid: 'Потрібне число від 1 — напр.: 8. Скільки у вас баків?',
 
   /** Starter kit composition + pump type choice (T5). */
   pumpChoice(prices: PriceSettings): string {
@@ -220,6 +226,15 @@ export const texts = {
       );
     });
     return `📋 Ваші останні замовлення:\n${lines.join('\n')}`;
+  },
+
+  /**
+   * Label of the cancel button under an order in "My orders". Shows date + quantity
+   * (not a raw id fragment) so the client can tell which order they are cancelling.
+   */
+  cancelOrderButton(order: Order): string {
+    const word = bottlesWord(order.bottles);
+    return `❌ Скасувати: ${order.bottles} ${word} (${shortDate(order.createdAt)})`;
   },
 
   /** HISTORY — the client has no orders yet. */

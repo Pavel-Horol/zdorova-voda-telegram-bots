@@ -35,6 +35,7 @@ import {
   parsePumpChoice,
   parseQty,
   parseTaraCount,
+  parseTaraChoice,
   parseYesNo,
   resolveAfterQty,
   resolveBack,
@@ -178,7 +179,7 @@ function buildHistoryKeyboard(orders: Order[]): InlineKeyboard | undefined {
   if (!cancellable.length) return undefined;
   const kb = new InlineKeyboard();
   for (const o of cancellable) {
-    kb.text(`❌ Скасувати #${o.id.slice(0, 8)}`, `ocancel:${o.id}`).row();
+    kb.text(texts.cancelOrderButton(o), `ocancel:${o.id}`).row();
   }
   return kb;
 }
@@ -251,8 +252,23 @@ const onboardingKeyboard = new InlineKeyboard()
   .row()
   .text('❌ Скасувати', CB_CANCEL);
 
-/** Under the own-bottles count input (OWN_TARA) — only cancel. */
+/** Under the manual own-bottles count input (OWN_TARA, "Інша кількість") — only cancel. */
 const ownTaraKeyboard = new InlineKeyboard().text('❌ Скасувати', CB_CANCEL);
+
+/**
+ * Own-bottles count selection (OWN_TARA): digits 1..MAX_QTY as buttons + "Інша
+ * кількість" for a larger number (typed as text) + cancel. Buttons by default keep the
+ * non-advanced audience off free text (UX P1/A3); the manual path stays for 6+ bottles.
+ */
+function buildOwnTaraKeyboard(): InlineKeyboard {
+  const kb = new InlineKeyboard();
+  for (let n = 1; n <= MAX_QTY; n += 1) {
+    kb.text(String(n), `tara:${n}`);
+  }
+  kb.row().text('✏️ Інша кількість', 'tara:more');
+  kb.row().text('❌ Скасувати', CB_CANCEL);
+  return kb;
+}
 
 /** Pump choice in the starter kit: standard / electric (T5). */
 const pumpChoiceKeyboard = new InlineKeyboard()
@@ -384,13 +400,12 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
 
   private registerHandlers(bot: Bot<BotContext>): void {
     bot.command('start', (ctx) => this.onStart(ctx));
-    // TEMP self-delete (test only) — remove this line and onDeleteMyself below.
-    bot.command('deletemyself', (ctx) => this.onDeleteMyself(ctx));
     bot.on('message:contact', (ctx) => this.onContact(ctx));
     bot.callbackQuery(/^ob:(kit|own|other)$/, (ctx) =>
       this.onOnboardingChoice(ctx),
     );
     bot.callbackQuery(/^pump:(std|electro)$/, (ctx) => this.onPumpChoice(ctx));
+    bot.callbackQuery(/^tara:(\d+|more)$/, (ctx) => this.onOwnTaraChoice(ctx));
     bot.callbackQuery(/^yn:(yes|no)$/, (ctx) => this.onOwnPumpAnswer(ctx));
     bot.callbackQuery(/^qty:([1-9]\d*)$/, (ctx) => this.onChooseQty(ctx));
     bot.callbackQuery(CB_CONFIRM_YES, (ctx) => this.onConfirmYes(ctx));
@@ -425,27 +440,6 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
     }
     await this.showMainMenu(ctx, client.name);
   }
-
-  // TEMP self-delete (test only) — remove this whole method when done.
-  private async onDeleteMyself(ctx: BotContext): Promise<void> {
-    if (!ctx.from) return;
-    try {
-      const deleted = await this.clients.deleteByTelegramId(
-        BigInt(ctx.from.id),
-      );
-      this.resetSession(ctx, Step.AwaitContact);
-      await this.replyMenu(
-        ctx,
-        deleted
-          ? 'Тебя удалено з бази. /start — почати заново.'
-          : 'Тебе немає в базі.',
-        contactKeyboard,
-      );
-    } catch {
-      await ctx.reply('Не вдалося видалити. Спробуй ще раз.');
-    }
-  }
-  // END TEMP
 
   /** Contact received: register the client and show the menu (AWAIT_CONTACT). */
   private async onContact(ctx: BotContext): Promise<void> {
@@ -704,10 +698,28 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * Own-bottles count input (OWN_TARA, step OwnTaraCount). The declared count is kept
-   * in the session (NOT written to the client yet — deferred commit) and makes the
-   * order OWN_TARA; it is committed to the client's balance only when the dispatcher
-   * accepts the order. Then we always ask about the pump (we no longer assume one).
+   * Own-bottles count via buttons (OWN_TARA, step OwnTaraCount). A digit sets the count;
+   * "Інша кількість" switches to manual text entry (for 6+ bottles). See
+   * {@link onOwnTaraCountInput} for how the declared count is treated (deferred commit).
+   */
+  private async onOwnTaraChoice(ctx: BotContext): Promise<void> {
+    await ctx.answerCallbackQuery();
+    if (ctx.session.step !== Step.OwnTaraCount) return;
+    const choice = parseTaraChoice(ctx.match?.[1] ?? '');
+    if (choice === null) return;
+    if (choice === 'more') {
+      await this.renderOwnTaraManual(ctx);
+      return;
+    }
+    ctx.session.claimedOnHand = choice;
+    await this.renderOwnPumpAsk(ctx);
+  }
+
+  /**
+   * Own-bottles count typed as text (OWN_TARA, step OwnTaraCount, "Інша кількість" path).
+   * The declared count is kept in the session (NOT written to the client yet — deferred
+   * commit) and makes the order OWN_TARA; it is committed to the client's balance only
+   * when the dispatcher accepts the order. Then we always ask about the pump.
    */
   private async onOwnTaraCountInput(
     ctx: BotContext,
@@ -776,18 +788,19 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
       await ctx.answerCallbackQuery();
       return;
     }
+    let toast: string;
     try {
       await this.orders.cancelOwnOrder(orderId, client.id);
+      toast = 'Замовлення скасовано';
     } catch {
       // Already accepted/delivered/foreign — cannot be cancelled.
-      await ctx.answerCallbackQuery({
-        text: 'Це замовлення вже не можна скасувати',
-      });
-      return;
+      toast = 'Це замовлення вже не можна скасувати';
     }
-    await ctx.answerCallbackQuery({ text: 'Замовлення скасовано' });
+    await ctx.answerCallbackQuery({ text: toast });
 
-    // Redraw the list in place to reflect the current statuses and buttons.
+    // Redraw the list in place either way (UX A1 — no dead ends): on success it drops
+    // the cancelled order's button; on failure it refreshes now-stale buttons so the
+    // client is not left tapping one that keeps failing.
     const orders = await this.orders.listByClient(client.id);
     const text = orders.length ? texts.history(orders) : texts.historyEmpty;
     const kb = buildHistoryKeyboard(orders);
@@ -795,7 +808,7 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
       await ctx.editMessageText(text, kb ? { reply_markup: kb } : undefined);
       if (!kb) ctx.session.activeInlineMessageId = undefined;
     } catch {
-      // Message too old to edit — the client already saw the "cancelled" toast.
+      // Message too old to edit — the client already saw the toast.
     }
   }
 
@@ -1112,7 +1125,14 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
     await this.replyInline(ctx, texts.onboarding, onboardingKeyboard);
   }
 
+  /** Own-bottles count — button screen (default). */
   private async renderOwnTaraCount(ctx: BotContext): Promise<void> {
+    ctx.session.step = Step.OwnTaraCount;
+    await this.replyInline(ctx, texts.ownTaraChoose, buildOwnTaraKeyboard());
+  }
+
+  /** Own-bottles count — manual text entry ("Інша кількість"); same step, cancel only. */
+  private async renderOwnTaraManual(ctx: BotContext): Promise<void> {
     ctx.session.step = Step.OwnTaraCount;
     await this.replyInline(ctx, texts.ownTaraCount, ownTaraKeyboard);
   }

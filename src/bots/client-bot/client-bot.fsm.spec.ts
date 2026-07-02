@@ -5,6 +5,7 @@ import {
   parsePumpChoice,
   parseQty,
   parseTaraCount,
+  parseTaraChoice,
   parseYesNo,
   resolveAfterQty,
   resolveBack,
@@ -169,6 +170,25 @@ describe('parseTaraCount', () => {
     expect(parseTaraCount('2.5')).toBeNull();
     expect(parseTaraCount(String(MAX_ORDER_QTY + 1))).toBeNull();
     expect(parseTaraCount('abc')).toBeNull();
+  });
+});
+
+describe('parseTaraChoice', () => {
+  it('a digit button → the validated count', () => {
+    expect(parseTaraChoice('1')).toBe(1);
+    expect(parseTaraChoice('5')).toBe(5);
+    expect(parseTaraChoice(String(MAX_ORDER_QTY))).toBe(MAX_ORDER_QTY);
+  });
+
+  it('"more" → the manual-entry sentinel', () => {
+    expect(parseTaraChoice('more')).toBe('more');
+  });
+
+  it('out of bounds / forged → null', () => {
+    expect(parseTaraChoice('0')).toBeNull();
+    expect(parseTaraChoice(String(MAX_ORDER_QTY + 1))).toBeNull();
+    expect(parseTaraChoice('abc')).toBeNull();
+    expect(parseTaraChoice('')).toBeNull();
   });
 });
 
