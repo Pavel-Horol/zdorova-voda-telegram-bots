@@ -268,11 +268,9 @@ describe('client-bot texts', () => {
       expect(texts.contacts(['+380123'])).toContain('+380123');
     });
 
-    it('contacts lists every active phone on its own line', () => {
+    it('contacts lists every active phone on its own line with a 📱 marker', () => {
       const out = texts.contacts(['+380123', '+380456']);
-      expect(out).toContain('+380123');
-      expect(out).toContain('+380456');
-      expect(out).toContain('+380123\n+380456');
+      expect(out).toContain('📱 +380123\n📱 +380456');
     });
 
     it('prices lists the water grid and the starter-kit line', () => {

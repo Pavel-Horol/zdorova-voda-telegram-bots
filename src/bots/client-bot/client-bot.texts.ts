@@ -264,11 +264,16 @@ export const texts = {
   /** Confirmation after the client saved/changed the address standalone. */
   addressSaved: 'Адресу збережено ✅',
 
-  /** CONTACTS — support phones (SPEC §6, "Contact us"). One per line, dispatcher-managed. */
+  /**
+   * CONTACTS — support phones (SPEC §6, "Contact us"). Dispatcher-managed; one per line
+   * with a 📱 marker (Telegram keeps the numbers tap-to-call). Blank line after the
+   * header for scannability (UX P6).
+   */
   contacts(phones: string[]): string {
+    const list = phones.map((p) => `📱 ${p}`).join('\n');
     return (
-      '📞 Зв’язатися з нами:\n' +
-      `${phones.join('\n')}\n\n` +
+      '📞 Зв’язатися з нами\n\n' +
+      `${list}\n\n` +
       'Телефонуйте, якщо потрібна допомога із замовленням або є запитання.'
     );
   },
