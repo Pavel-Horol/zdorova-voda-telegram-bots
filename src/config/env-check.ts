@@ -1,9 +1,9 @@
 /**
  * Startup configuration self-check (pure, no side effects — so it is unit-tested).
- * The app degrades gracefully on missing env (bots simply don't start, the support
- * phone falls back to a placeholder), which makes a misconfiguration easy to miss.
- * This turns that silent degradation into a clear boot-time warning list. NON-fatal:
- * a partial local run (e.g. only the client bot) stays possible.
+ * Two levels: {@link collectConfigWarnings} lists missing vars that only degrade
+ * gracefully (a bot that doesn't start), while {@link supportPhoneConfigured} gates a
+ * FATAL check in main.ts — SUPPORT_PHONE is the guaranteed fallback for "Зв'язатися",
+ * so the app refuses to boot without a real number (never a client-facing dead end).
  */
 export type EnvLike = Record<string, string | undefined>;
 
@@ -16,21 +16,24 @@ const REQUIRED: ReadonlyArray<readonly [key: string, impact: string]> = [
 ];
 
 /**
- * Collects human-readable warnings about missing/placeholder critical config.
- * Empty array = everything essential is set. The support phone is flagged when unset
- * OR still the `.env.example` placeholder (contains an "X"), since the client would
- * otherwise be shown a bogus number.
+ * Collects human-readable warnings about missing critical config (NON-fatal: a partial
+ * local run, e.g. only the client bot, stays possible). Empty array = all essential set.
+ * SUPPORT_PHONE is handled separately (fatal) — see {@link supportPhoneConfigured}.
  */
 export function collectConfigWarnings(env: EnvLike): string[] {
   const warnings: string[] = [];
   for (const [key, impact] of REQUIRED) {
     if (!env[key]?.trim()) warnings.push(`${key} не задано — ${impact}`);
   }
-  const phone = env.SUPPORT_PHONE?.trim();
-  if (!phone || phone.includes('X')) {
-    warnings.push(
-      'SUPPORT_PHONE не задано або лишилась заглушка — клієнт побачить некоректний номер',
-    );
-  }
   return warnings;
+}
+
+/**
+ * Whether SUPPORT_PHONE holds a real number: set and not the `.env.example` placeholder
+ * (which contains an "X"). It is the guaranteed fallback shown on "Зв'язатися" when the
+ * dispatcher has no active number, so main.ts refuses to boot when this is false.
+ */
+export function supportPhoneConfigured(env: EnvLike): boolean {
+  const phone = env.SUPPORT_PHONE?.trim();
+  return !!phone && !phone.includes('X');
 }

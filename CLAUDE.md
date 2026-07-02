@@ -46,6 +46,7 @@ src/
     orders/                  # заказы, статусы; order-events.ts (событие смены статуса)
     pricing/                 # pricing.service.ts — ЕДИНСТВЕННОЕ место расчёта суммы (+ .spec)
     pricing-settings/        # чтение/редактирование цен (+ .spec)
+    contacts/                # телефоны поддержки (ContactPhone), правит диспетчер (+ .spec)
   bots/
     client-bot/
       client-bot.service.ts  # grammY-инстанс №1: весь FSM клиента, ручной (НЕ scenes)
@@ -153,7 +154,9 @@ CLIENT_BOT_TOKEN=...
 DISPATCHER_BOT_TOKEN=...
 DISPATCHER_CHAT_ID=...        # куда слать уведомления о заказах
 DISPATCHER2_CHAT_ID=...       # второй диспетчер (опц.): заказы уходят в оба чата, оба проходят chat-guard
-SUPPORT_PHONE=+380XXXXXXXXX
+SUPPORT_PHONE=+380XXXXXXXXX   # ОБЯЗАТЕЛЕН: резерв для «Связаться». С заглушкой (X) или
+                              # пустым приложение НЕ стартует (fatal-проверка в main.ts).
+                              # Основные номера диспетчер правит в боте (/contacts, ContactPhone).
 # для локального прогона — отдельные тестовые токены, не прод (см. выше про 409)
 ```
 

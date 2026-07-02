@@ -5,6 +5,7 @@ import type {
   Client,
   Address,
   PriceSettings,
+  ContactPhone,
 } from '../../../generated/prisma/client';
 import type { EditablePriceField } from '../../modules/pricing-settings/pricing-settings.service';
 
@@ -175,7 +176,49 @@ export const dispatcherHelp =
   '/prices — переглянути та змінити ціни\n' +
   '/stats — статистика за замовленнями\n' +
   '/client — знайти клієнта за номером телефону\n' +
+  '/contacts — телефони підтримки, які бачить клієнт\n' +
   '/help — ця довідка';
+
+/**
+ * Support phone list for the dispatcher (📞 Контакти). Active numbers are shown to the
+ * client on "Зв'язатися"; hidden ones are kept but not shown. Empty list → the client
+ * sees the SUPPORT_PHONE env fallback, so there is never a dead end.
+ */
+export function contactsListMessage(contacts: ContactPhone[]): string {
+  if (!contacts.length) {
+    return (
+      '📞 Телефони підтримки\n\n' +
+      'Список порожній — клієнт бачить резервний номер з конфігурації.\n' +
+      'Додайте номер кнопкою нижче 👇'
+    );
+  }
+  const lines = contacts.map((c) => `${c.active ? '✅' : '🙈'} ${c.phone}`);
+  return (
+    '📞 Телефони підтримки:\n' +
+    `${lines.join('\n')}\n\n` +
+    '✅ — бачить клієнт, 🙈 — прихований.'
+  );
+}
+
+/** Per-number management buttons (toggle show/hide, delete) + add. */
+export function contactsKeyboard(contacts: ContactPhone[]): InlineKeyboard {
+  const kb = new InlineKeyboard();
+  for (const c of contacts) {
+    const toggle = c.active ? `🙈 ${c.phone}` : `✅ ${c.phone}`;
+    kb.text(toggle, `ct:tgl:${c.id}`).text('🗑', `ct:del:${c.id}`).row();
+  }
+  kb.text('➕ Додати номер', 'ct:add');
+  return kb;
+}
+
+/** Prompt for a new support phone (📞 → ➕). */
+export const addContactPrompt =
+  'Введіть номер телефону, який бачитимуть клієнти ' +
+  '(напр.: +380501234567 або 0501234567):';
+
+/** New support phone was not recognised — ask again with an example. */
+export const contactAddInvalid =
+  'Не розпізнав номер. Введіть у форматі +380501234567 або 0501234567.';
 
 /**
  * Commands for the Telegram menu ("/"). Registered via setMyCommands at startup —
@@ -186,6 +229,7 @@ export const dispatcherCommands = [
   { command: 'prices', description: '💰 Ціни' },
   { command: 'stats', description: '📊 Статистика' },
   { command: 'client', description: '🔎 Знайти клієнта за телефоном' },
+  { command: 'contacts', description: '📞 Телефони підтримки' },
   { command: 'help', description: '❓ Довідка' },
 ];
 

@@ -17,6 +17,7 @@ import { OnEvent } from '@nestjs/event-emitter';
 import { ClientsService } from '../../modules/clients/clients.service';
 import { OrdersService } from '../../modules/orders/orders.service';
 import { PricingSettingsService } from '../../modules/pricing-settings/pricing-settings.service';
+import { ContactsService } from '../../modules/contacts/contacts.service';
 import {
   ORDER_STATUS_CHANGED,
   ORDER_EDITED,
@@ -303,6 +304,7 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
     private readonly clients: ClientsService,
     private readonly orders: OrdersService,
     private readonly pricingSettings: PricingSettingsService,
+    private readonly contacts: ContactsService,
   ) {}
 
   onModuleInit(): void {
@@ -680,9 +682,8 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
         return;
       case 'other': {
         // Non-standard — handled by the dispatcher (by call). Notify the dispatcher
-        // to call back; best-effort: the client gets the support phone either way (§8).
-        const phone =
-          this.config.get<string>('SUPPORT_PHONE') ?? '(телефон уточнюється)';
+        // to call back; best-effort: the client gets a support phone either way (§8).
+        const phone = (await this.supportPhones())[0] ?? '';
         this.resetSession(ctx, Step.MainMenu);
         try {
           await this.orders.requestCallback(client.id);
@@ -822,15 +823,25 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
     await this.replyMenu(ctx, texts.prices(prices));
   }
 
-  /** "Contact us": support phone from config (SPEC §6, §11). */
+  /** "Contact us": dispatcher-managed active phones, env SUPPORT_PHONE as fallback. */
   private async showContacts(ctx: BotContext): Promise<void> {
     const client = await this.requireClient(ctx);
     if (!client) return;
     this.leaveOrderFlow(ctx);
 
-    const phone =
-      this.config.get<string>('SUPPORT_PHONE') ?? '(телефон уточнюється)';
-    await this.replyMenu(ctx, texts.contacts(phone));
+    await this.replyMenu(ctx, texts.contacts(await this.supportPhones()));
+  }
+
+  /**
+   * Support phones to show the client: the dispatcher-managed active list, else the env
+   * SUPPORT_PHONE fallback (validated fatal at startup, so never a placeholder/empty in
+   * production — the "Contact us" screen is never a dead end, UX P2).
+   */
+  private async supportPhones(): Promise<string[]> {
+    const active = await this.contacts.listActive();
+    if (active.length) return active.map((c) => c.phone);
+    const fallback = this.config.get<string>('SUPPORT_PHONE')?.trim();
+    return fallback ? [fallback] : [];
   }
 
   /**

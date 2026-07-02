@@ -11,6 +11,7 @@ export const BTN_ORDERS = '📋 Активні';
 export const BTN_PRICES = '💰 Ціни';
 export const BTN_STATS = '📊 Статистика';
 export const BTN_CLIENT = '🔎 Клієнт';
+export const BTN_CONTACTS = '📞 Контакти';
 
 /**
  * Which field of an order the dispatcher chose to edit (✏️ Змінити → sub-menu):
@@ -21,12 +22,16 @@ export type OrderEditField = 'qty' | 'addr' | 'comment';
 
 /** Intent the incoming dispatcher text reduces to. Execution — in the handler. */
 export type DispatcherTextIntent =
-  | { kind: 'menu'; action: 'orders' | 'prices' | 'stats' | 'client' }
+  | {
+      kind: 'menu';
+      action: 'orders' | 'prices' | 'stats' | 'client' | 'contacts';
+    }
   | { kind: 'edit-order'; orderId: string; field: OrderEditField }
   | { kind: 'edit-claim'; orderId: string }
   | { kind: 'set-geo'; orderId: string }
   | { kind: 'set-delivery-note'; orderId: string }
   | { kind: 'lookup-client' }
+  | { kind: 'add-contact' }
   | { kind: 'edit-price'; field: EditablePriceField }
   | { kind: 'ignore' };
 
@@ -42,6 +47,8 @@ export interface DispatcherInputState {
   deliveryNoteOrderId?: string;
   /** Awaiting a phone number to look a client up (🔎 Клієнт). */
   lookupClient?: boolean;
+  /** Awaiting a new support phone to add to the contact list (📞 Контакти → ➕). */
+  addingContact?: boolean;
   editingPriceField?: EditablePriceField;
 }
 
@@ -65,6 +72,8 @@ export function routeDispatcherText(
       return { kind: 'menu', action: 'stats' };
     case BTN_CLIENT:
       return { kind: 'menu', action: 'client' };
+    case BTN_CONTACTS:
+      return { kind: 'menu', action: 'contacts' };
     default:
       break;
   }
@@ -86,6 +95,9 @@ export function routeDispatcherText(
   }
   if (state.lookupClient) {
     return { kind: 'lookup-client' };
+  }
+  if (state.addingContact) {
+    return { kind: 'add-contact' };
   }
   if (state.editingPriceField) {
     return { kind: 'edit-price', field: state.editingPriceField };

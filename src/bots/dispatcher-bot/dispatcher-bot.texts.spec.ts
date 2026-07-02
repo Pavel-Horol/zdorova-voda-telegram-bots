@@ -3,10 +3,13 @@ import type {
   Client,
   Address,
   PriceSettings,
+  ContactPhone,
 } from '../../../generated/prisma/client';
 import { OrderKind, OrderStatus } from '../../../generated/prisma/enums';
 import {
   activeOrdersHeader,
+  contactsKeyboard,
+  contactsListMessage,
   callbackRequestMessage,
   clientCancelledMessage,
   clientCardMessage,
@@ -488,5 +491,38 @@ describe('summary / prompt texts', () => {
     const callback = callbackRequestMessage(makeCardClient({ name: null }));
     expect(callback).toContain('ЗАПИТ НА ДЗВІНОК');
     expect(callback).toContain('без імені');
+  });
+
+  describe('contacts (support phones)', () => {
+    const makeContact = (over: Partial<ContactPhone> = {}): ContactPhone => ({
+      id: 'ct1',
+      phone: '+380501234567',
+      active: true,
+      createdAt: new Date('2026-07-01T00:00:00.000Z'),
+      ...over,
+    });
+
+    it('empty list explains the env fallback', () => {
+      expect(contactsListMessage([])).toContain('резервний номер');
+    });
+
+    it('marks active with ✅ and hidden with 🙈', () => {
+      const out = contactsListMessage([
+        makeContact({ phone: '+380501112233', active: true }),
+        makeContact({ id: 'ct2', phone: '+380504445566', active: false }),
+      ]);
+      expect(out).toContain('✅ +380501112233');
+      expect(out).toContain('🙈 +380504445566');
+    });
+
+    it('keyboard has a toggle + delete per number and an add button', () => {
+      const kb = contactsKeyboard([makeContact({ id: 'ct9' })]);
+      const cbs = kb.inline_keyboard
+        .flat()
+        .map((b) => (b as { callback_data: string }).callback_data);
+      expect(cbs).toContain('ct:tgl:ct9');
+      expect(cbs).toContain('ct:del:ct9');
+      expect(cbs).toContain('ct:add');
+    });
   });
 });

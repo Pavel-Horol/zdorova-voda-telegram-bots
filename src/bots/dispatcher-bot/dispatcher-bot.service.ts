@@ -16,6 +16,7 @@ import {
   PricingSettingsService,
   type EditablePriceField,
 } from '../../modules/pricing-settings/pricing-settings.service';
+import { ContactsService } from '../../modules/contacts/contacts.service';
 import {
   DISPATCHER_BOT,
   dispatcherChatIds,
@@ -25,6 +26,10 @@ import {
 } from './dispatcher-bot.bot';
 import {
   activeOrdersHeader,
+  addContactPrompt,
+  contactAddInvalid,
+  contactsKeyboard,
+  contactsListMessage,
   dispatcherCommands,
   dispatcherHelp,
   clientCardMessage,
@@ -56,6 +61,7 @@ import {
 } from './dispatcher-bot.texts';
 import {
   BTN_CLIENT,
+  BTN_CONTACTS,
   BTN_ORDERS,
   BTN_PRICES,
   BTN_STATS,
@@ -78,6 +84,7 @@ const dispatcherMenuKeyboard = new Keyboard()
   .text(BTN_STATS)
   .row()
   .text(BTN_CLIENT)
+  .text(BTN_CONTACTS)
   .resized()
   .persistent();
 
@@ -95,6 +102,7 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
     private readonly config: ConfigService,
     private readonly orders: OrdersService,
     private readonly pricingSettings: PricingSettingsService,
+    private readonly contacts: ContactsService,
     private readonly clients: ClientsService,
   ) {}
 
@@ -151,6 +159,7 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
     bot.command('prices', (ctx) => this.onPrices(ctx));
     bot.command('stats', (ctx) => this.onStats(ctx));
     bot.command('client', (ctx) => this.onClientLookupStart(ctx));
+    bot.command('contacts', (ctx) => this.onContacts(ctx));
     bot.callbackQuery(/^acc:(.+)$/, (ctx) => this.onTransition(ctx, 'accept'));
     bot.callbackQuery(/^del:(.+)$/, (ctx) => this.onTransition(ctx, 'deliver'));
     bot.callbackQuery(/^can:(.+)$/, (ctx) => this.onTransition(ctx, 'cancel'));
@@ -168,6 +177,9 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
     bot.callbackQuery(/^etac:(.+)$/, (ctx) => this.onDeliveryEtaCustom(ctx));
     bot.callbackQuery(/^etax:(.+)$/, (ctx) => this.onDeliveryEtaCancel(ctx));
     bot.callbackQuery(/^drvline:(.+)$/, (ctx) => this.onDriverLine(ctx));
+    bot.callbackQuery('ct:add', (ctx) => this.onAddContactStart(ctx));
+    bot.callbackQuery(/^ct:tgl:(.+)$/, (ctx) => this.onToggleContact(ctx));
+    bot.callbackQuery(/^ct:del:(.+)$/, (ctx) => this.onDeleteContact(ctx));
     bot.callbackQuery('pe_cancel', (ctx) => this.onCancelPriceEdit(ctx));
     bot.callbackQuery(
       /^pe:(price1|priceFrom2|priceFrom6|depositPerBottle|pumpPrice|electroPumpPrice|waterStartPrice)$/,
@@ -267,6 +279,7 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
     ctx.session.geoTaggingOrderId = undefined;
     ctx.session.deliveryNoteOrderId = undefined;
     ctx.session.lookupClient = undefined;
+    ctx.session.addingContact = undefined;
     const prices = await this.pricingSettings.getCurrent();
     await ctx.reply(pricesMessage(prices), { reply_markup: pricesKeyboard() });
   }
@@ -281,6 +294,7 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
     ctx.session.geoTaggingOrderId = undefined;
     ctx.session.deliveryNoteOrderId = undefined;
     ctx.session.lookupClient = undefined;
+    ctx.session.addingContact = undefined;
     ctx.session.editingPriceField = field;
     await ctx.reply(
       `Введіть нове значення для «${priceFieldLabel(field)}» (ціле число грн):`,
@@ -321,6 +335,7 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
     ctx.session.geoTaggingOrderId = undefined;
     ctx.session.deliveryNoteOrderId = undefined;
     ctx.session.lookupClient = undefined;
+    ctx.session.addingContact = undefined;
     ctx.session.editingOrder = { id, field };
     const prompt =
       field === 'qty'
@@ -353,6 +368,7 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
     ctx.session.geoTaggingOrderId = undefined;
     ctx.session.deliveryNoteOrderId = undefined;
     ctx.session.lookupClient = undefined;
+    ctx.session.addingContact = undefined;
     ctx.session.editingClaimOrderId = id;
     await ctx.reply(editClaimPrompt(id));
   }
@@ -371,6 +387,7 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
     ctx.session.editingClaimOrderId = undefined;
     ctx.session.deliveryNoteOrderId = undefined;
     ctx.session.lookupClient = undefined;
+    ctx.session.addingContact = undefined;
     ctx.session.geoTaggingOrderId = id;
     await ctx.reply(geoTagPrompt(id));
   }
@@ -422,6 +439,7 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
     ctx.session.editingClaimOrderId = undefined;
     ctx.session.geoTaggingOrderId = undefined;
     ctx.session.lookupClient = undefined;
+    ctx.session.addingContact = undefined;
     ctx.session.deliveryNoteOrderId = id;
     await ctx.editMessageText(deliveryEtaCustomPrompt(id));
   }
@@ -443,6 +461,7 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
     ctx.session.editingClaimOrderId = undefined;
     ctx.session.geoTaggingOrderId = undefined;
     ctx.session.deliveryNoteOrderId = undefined;
+    ctx.session.addingContact = undefined;
     const arg = ctx.match;
     const query = typeof arg === 'string' ? arg.trim() : '';
     if (query) {
@@ -534,11 +553,16 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
         else if (intent.action === 'prices') await this.onPrices(ctx);
         else if (intent.action === 'client')
           await this.onClientLookupStart(ctx);
+        else if (intent.action === 'contacts') await this.onContacts(ctx);
         else await this.onStats(ctx);
         return;
       case 'lookup-client':
         // Phone typed after "🔎 Клієнт" — search and show client card(s).
         await this.applyClientLookup(ctx, text);
+        return;
+      case 'add-contact':
+        // New support phone typed after "📞 Контакти → ➕".
+        await this.applyAddContact(ctx, text);
         return;
       case 'edit-order':
         // New value for the picked field of an order (✏️ Edit) — priority over price.
@@ -727,6 +751,110 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
     }
     ctx.session.deliveryNoteOrderId = undefined;
     await ctx.reply(deliveryEtaSent(orderId, text));
+  }
+
+  /**
+   * /contacts (and the "📞 Контакти" button) — manage the support phones the client
+   * sees on "Зв'язатися". Cancels any pending input (like /prices) and shows the list.
+   */
+  private async onContacts(ctx: DispatcherContext): Promise<void> {
+    ctx.session.editingPriceField = undefined;
+    ctx.session.editingOrder = undefined;
+    ctx.session.editingClaimOrderId = undefined;
+    ctx.session.geoTaggingOrderId = undefined;
+    ctx.session.deliveryNoteOrderId = undefined;
+    ctx.session.lookupClient = undefined;
+    ctx.session.addingContact = undefined;
+    const contacts = await this.contacts.listAll();
+    await ctx.reply(contactsListMessage(contacts), {
+      reply_markup: contactsKeyboard(contacts),
+    });
+  }
+
+  /** "➕ Додати номер": wait for the new phone as text (replaces the list buttons). */
+  private async onAddContactStart(ctx: DispatcherContext): Promise<void> {
+    await ctx.answerCallbackQuery();
+    ctx.session.editingPriceField = undefined; // input modes are mutually exclusive
+    ctx.session.editingOrder = undefined;
+    ctx.session.editingClaimOrderId = undefined;
+    ctx.session.geoTaggingOrderId = undefined;
+    ctx.session.deliveryNoteOrderId = undefined;
+    ctx.session.lookupClient = undefined;
+    ctx.session.addingContact = true;
+    await ctx.editMessageText(addContactPrompt);
+  }
+
+  /**
+   * New support phone typed (📞 → ➕): normalize + save, then show the refreshed list.
+   * An unrecognised number keeps the input mode and asks again (no dead end).
+   */
+  private async applyAddContact(
+    ctx: DispatcherContext,
+    text: string,
+  ): Promise<void> {
+    try {
+      await this.contacts.add(text);
+    } catch {
+      // normalizeContactPhone rejected it — stay in adding mode and ask again.
+      await ctx.reply(contactAddInvalid);
+      return;
+    }
+    ctx.session.addingContact = undefined;
+    const contacts = await this.contacts.listAll();
+    await ctx.reply(`Додано ✅\n\n${contactsListMessage(contacts)}`, {
+      reply_markup: contactsKeyboard(contacts),
+    });
+  }
+
+  /** "🙈/✅" on a number: toggle whether the client sees it; redraw the list in place. */
+  private async onToggleContact(ctx: DispatcherContext): Promise<void> {
+    const id = ctx.match?.[1];
+    if (!id) {
+      await ctx.answerCallbackQuery();
+      return;
+    }
+    const contacts = await this.contacts.listAll();
+    const target = contacts.find((c) => c.id === id);
+    if (!target) {
+      await ctx.answerCallbackQuery({ text: 'Номер не знайдено' });
+      await this.redrawContacts(ctx, contacts);
+      return;
+    }
+    await this.contacts.setActive(id, !target.active);
+    await ctx.answerCallbackQuery({
+      text: target.active ? 'Приховано' : 'Показано',
+    });
+    await this.redrawContacts(ctx, await this.contacts.listAll());
+  }
+
+  /** "🗑" on a number: delete it; redraw the list in place. */
+  private async onDeleteContact(ctx: DispatcherContext): Promise<void> {
+    const id = ctx.match?.[1];
+    if (!id) {
+      await ctx.answerCallbackQuery();
+      return;
+    }
+    try {
+      await this.contacts.remove(id);
+    } catch {
+      // Already gone — fall through to a redraw with the current list.
+    }
+    await ctx.answerCallbackQuery({ text: 'Видалено' });
+    await this.redrawContacts(ctx, await this.contacts.listAll());
+  }
+
+  /** Redraws the contacts message in place (edit), swallowing a too-old-to-edit error. */
+  private async redrawContacts(
+    ctx: DispatcherContext,
+    contacts: Awaited<ReturnType<ContactsService['listAll']>>,
+  ): Promise<void> {
+    try {
+      await ctx.editMessageText(contactsListMessage(contacts), {
+        reply_markup: contactsKeyboard(contacts),
+      });
+    } catch {
+      // Message too old / unchanged — the toast already reflected the action.
+    }
   }
 
   /** /stats — summary for today and this week (SPEC §7). */

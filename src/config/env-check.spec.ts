@@ -1,4 +1,4 @@
-import { collectConfigWarnings } from './env-check';
+import { collectConfigWarnings, supportPhoneConfigured } from './env-check';
 
 const fullEnv = {
   DATABASE_URL: 'postgresql://aqua:aqua@localhost:5432/aqua',
@@ -13,7 +13,7 @@ describe('collectConfigWarnings', () => {
     expect(collectConfigWarnings(fullEnv)).toEqual([]);
   });
 
-  it('flags each missing critical var', () => {
+  it('flags each missing critical var (SUPPORT_PHONE handled separately, fatal)', () => {
     const warnings = collectConfigWarnings({});
     expect(warnings).toEqual(
       expect.arrayContaining([
@@ -21,8 +21,11 @@ describe('collectConfigWarnings', () => {
         expect.stringContaining('CLIENT_BOT_TOKEN'),
         expect.stringContaining('DISPATCHER_BOT_TOKEN'),
         expect.stringContaining('DISPATCHER_CHAT_ID'),
-        expect.stringContaining('SUPPORT_PHONE'),
       ]),
+    );
+    // SUPPORT_PHONE is no longer a soft warning — it gates a fatal boot check.
+    expect(warnings).not.toEqual(
+      expect.arrayContaining([expect.stringContaining('SUPPORT_PHONE')]),
     );
   });
 
@@ -31,10 +34,21 @@ describe('collectConfigWarnings', () => {
       collectConfigWarnings({ ...fullEnv, DISPATCHER_CHAT_ID: '   ' }),
     ).toEqual([expect.stringContaining('DISPATCHER_CHAT_ID')]);
   });
+});
 
-  it('flags the leftover SUPPORT_PHONE placeholder (contains an X)', () => {
-    expect(
-      collectConfigWarnings({ ...fullEnv, SUPPORT_PHONE: '+380XXXXXXXXX' }),
-    ).toEqual([expect.stringContaining('SUPPORT_PHONE')]);
+describe('supportPhoneConfigured', () => {
+  it('true for a real number', () => {
+    expect(supportPhoneConfigured(fullEnv)).toBe(true);
+  });
+
+  it('false when missing or blank', () => {
+    expect(supportPhoneConfigured({})).toBe(false);
+    expect(supportPhoneConfigured({ SUPPORT_PHONE: '   ' })).toBe(false);
+  });
+
+  it('false for the leftover .env.example placeholder (contains an X)', () => {
+    expect(supportPhoneConfigured({ SUPPORT_PHONE: '+380XXXXXXXXX' })).toBe(
+      false,
+    );
   });
 });

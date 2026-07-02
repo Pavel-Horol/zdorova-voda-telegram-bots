@@ -1,5 +1,6 @@
 import {
   BTN_CLIENT,
+  BTN_CONTACTS,
   BTN_ORDERS,
   BTN_PRICES,
   BTN_STATS,
@@ -116,6 +117,26 @@ describe('routeDispatcherText', () => {
     expect(
       routeDispatcherText('30', { editingPriceField: 'pumpPrice' }),
     ).toEqual({ kind: 'edit-price', field: 'pumpPrice' });
+  });
+
+  it('"Contacts" button → contacts menu', () => {
+    expect(routeDispatcherText(BTN_CONTACTS, noMode)).toEqual({
+      kind: 'menu',
+      action: 'contacts',
+    });
+  });
+
+  it('only adding-contact is active → add-contact', () => {
+    expect(
+      routeDispatcherText('+380501234567', { addingContact: true }),
+    ).toEqual({ kind: 'add-contact' });
+  });
+
+  it('the Contacts button wins over an active adding-contact mode', () => {
+    expect(routeDispatcherText(BTN_CONTACTS, { addingContact: true })).toEqual({
+      kind: 'menu',
+      action: 'contacts',
+    });
   });
 
   it('neither a button nor an active mode → ignore', () => {

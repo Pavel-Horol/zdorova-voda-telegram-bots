@@ -264,11 +264,11 @@ export const texts = {
   /** Confirmation after the client saved/changed the address standalone. */
   addressSaved: 'Адресу збережено ✅',
 
-  /** CONTACTS — support phone (SPEC §6, "Contact us"; §11 — placeholder). */
-  contacts(phone: string): string {
+  /** CONTACTS — support phones (SPEC §6, "Contact us"). One per line, dispatcher-managed. */
+  contacts(phones: string[]): string {
     return (
       '📞 Зв’язатися з нами:\n' +
-      `${phone}\n\n` +
+      `${phones.join('\n')}\n\n` +
       'Телефонуйте, якщо потрібна допомога із замовленням або є запитання.'
     );
   },

@@ -117,6 +117,18 @@ model Order {
   @@index([status])
 }
 
+/// Support contact phone shown to the client on "Зв'язатися". Dispatcher-managed
+/// (add / hide / delete via the dispatcher bot). The client sees only `active` rows;
+/// if none are active, the SUPPORT_PHONE env fallback is shown, so the "Contact us"
+/// screen is never a dead end (UX P2). `active=false` keeps the number but hides it.
+model ContactPhone {
+  id        String   @id @default(uuid())
+  /// Normalized to `+<digits>` on input (see contacts.service).
+  phone     String   @unique
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+}
+
 /// Price settings — a singleton (one row for the whole system).
 /// id is always = 1; the seed creates the row with defaults (PRODUCT.md "Pricing").
 model PriceSettings {
