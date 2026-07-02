@@ -44,6 +44,60 @@ describe('ClientsService', () => {
     service = new ClientsService(prisma as unknown as PrismaService);
   });
 
+  describe('lookups', () => {
+    it('findByTelegramId queries the unique telegramId', async () => {
+      const c = { id: 'c1', telegramId: 42n };
+      prisma.client.findUnique.mockResolvedValue(c);
+
+      await expect(service.findByTelegramId(42n)).resolves.toEqual(c);
+      expect(prisma.client.findUnique).toHaveBeenCalledWith({
+        where: { telegramId: 42n },
+      });
+    });
+
+    it('findByPhone queries the unique phone', async () => {
+      prisma.client.findUnique.mockResolvedValue(null);
+
+      await expect(service.findByPhone('+380501234567')).resolves.toBeNull();
+      expect(prisma.client.findUnique).toHaveBeenCalledWith({
+        where: { phone: '+380501234567' },
+      });
+    });
+
+    it('getById queries the unique id', async () => {
+      const c = { id: 'c1' };
+      prisma.client.findUnique.mockResolvedValue(c);
+
+      await expect(service.getById('c1')).resolves.toEqual(c);
+      expect(prisma.client.findUnique).toHaveBeenCalledWith({
+        where: { id: 'c1' },
+      });
+    });
+  });
+
+  describe('create', () => {
+    it('creates a client, defaulting an omitted name to null', async () => {
+      const created = { id: 'c1' };
+      prisma.client.create.mockResolvedValue(created);
+
+      await service.create({ telegramId: 7n, phone: '+380' });
+
+      expect(prisma.client.create).toHaveBeenCalledWith({
+        data: { telegramId: 7n, phone: '+380', name: null },
+      });
+    });
+
+    it('keeps a provided name', async () => {
+      prisma.client.create.mockResolvedValue({ id: 'c1' });
+
+      await service.create({ telegramId: 7n, phone: '+380', name: 'Іван' });
+
+      expect(prisma.client.create).toHaveBeenCalledWith({
+        data: { telegramId: 7n, phone: '+380', name: 'Іван' },
+      });
+    });
+  });
+
   describe('searchByPhone', () => {
     it('matches clients whose phone contains the token, newest first, capped', async () => {
       const found = [{ id: 'c1', phone: '+380501234567' }];
@@ -55,6 +109,16 @@ describe('ClientsService', () => {
         orderBy: { createdAt: 'desc' },
         take: 5,
       });
+    });
+
+    it('honours a custom limit', async () => {
+      prisma.client.findMany.mockResolvedValue([]);
+
+      await service.searchByPhone('050', 10);
+
+      expect(prisma.client.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ take: 10 }),
+      );
     });
   });
 
@@ -81,6 +145,21 @@ describe('ClientsService', () => {
       expect(prisma.$transaction).not.toHaveBeenCalled();
       expect(prisma.address.create).toHaveBeenCalledWith({
         data: { clientId: 'c1', raw: 'St. 1', comment: null, isDefault: false },
+      });
+    });
+
+    it('passes a provided comment through on a non-default address', async () => {
+      prisma.address.create.mockResolvedValue({ id: 'a1' });
+
+      await service.addAddress('c1', { raw: 'St. 1', comment: 'floor 3' });
+
+      expect(prisma.address.create).toHaveBeenCalledWith({
+        data: {
+          clientId: 'c1',
+          raw: 'St. 1',
+          comment: 'floor 3',
+          isDefault: false,
+        },
       });
     });
 
@@ -117,6 +196,24 @@ describe('ClientsService', () => {
         where: { id: 'c1' },
         data: { bottlesOnHand: 3, hasPump: true },
       });
+    });
+  });
+
+  describe('deleteByTelegramId (temp self-delete)', () => {
+    it('returns true when a row was deleted', async () => {
+      (prisma.client as unknown as { deleteMany: jest.Mock }).deleteMany = jest
+        .fn()
+        .mockResolvedValue({ count: 1 });
+
+      await expect(service.deleteByTelegramId(1n)).resolves.toBe(true);
+    });
+
+    it('returns false when nothing matched', async () => {
+      (prisma.client as unknown as { deleteMany: jest.Mock }).deleteMany = jest
+        .fn()
+        .mockResolvedValue({ count: 0 });
+
+      await expect(service.deleteByTelegramId(1n)).resolves.toBe(false);
     });
   });
 

@@ -29,9 +29,19 @@ import {
   dispatcherHelp,
   clientCardMessage,
   clientLookupPrompt,
+  deliveryEtaAcceptNudge,
+  deliveryEtaCustomPrompt,
+  deliveryEtaKeyboard,
+  deliveryEtaPreset,
+  deliveryEtaPrompt,
+  deliveryEtaSent,
   dispatcherWelcome,
   driverLine,
+  editAddressPrompt,
   editClaimPrompt,
+  editCommentPrompt,
+  editMenuKeyboard,
+  editMenuPrompt,
   editQuantityPrompt,
   geoTagPrompt,
   noActiveOrders,
@@ -49,6 +59,7 @@ import {
   BTN_ORDERS,
   BTN_PRICES,
   BTN_STATS,
+  type OrderEditField,
   parseEditedQuantity,
   parseGeoInput,
   parsePriceValue,
@@ -144,8 +155,18 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
     bot.callbackQuery(/^del:(.+)$/, (ctx) => this.onTransition(ctx, 'deliver'));
     bot.callbackQuery(/^can:(.+)$/, (ctx) => this.onTransition(ctx, 'cancel'));
     bot.callbackQuery(/^edit:(.+)$/, (ctx) => this.onEditOrder(ctx));
+    bot.callbackQuery(/^ef:(qty|addr|comment):(.+)$/, (ctx) =>
+      this.onPickEditField(ctx),
+    );
+    bot.callbackQuery('ef_cancel', (ctx) => this.onCancelOrderEdit(ctx));
     bot.callbackQuery(/^claim:(.+)$/, (ctx) => this.onEditClaim(ctx));
     bot.callbackQuery(/^geo:(.+)$/, (ctx) => this.onGeoTag(ctx));
+    bot.callbackQuery(/^eta:(.+)$/, (ctx) => this.onDeliveryEtaStart(ctx));
+    bot.callbackQuery(/^etap:(td|tm|h1|h2):(.+)$/, (ctx) =>
+      this.onPickDeliveryPreset(ctx),
+    );
+    bot.callbackQuery(/^etac:(.+)$/, (ctx) => this.onDeliveryEtaCustom(ctx));
+    bot.callbackQuery(/^etax:(.+)$/, (ctx) => this.onDeliveryEtaCancel(ctx));
     bot.callbackQuery(/^drvline:(.+)$/, (ctx) => this.onDriverLine(ctx));
     bot.callbackQuery('pe_cancel', (ctx) => this.onCancelPriceEdit(ctx));
     bot.callbackQuery(
@@ -183,6 +204,14 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
 
     await ctx.answerCallbackQuery({ text: 'Готово' });
     await this.refreshOrderMessage(ctx, id);
+    // Right after accepting, nudge the dispatcher to tell the client the timing
+    // (variant B). A separate message so the freshly-redrawn card keeps its buttons;
+    // ignoring it is fine — the time can also be set later via "🕒 Час доставки".
+    if (action === 'accept') {
+      await ctx.reply(deliveryEtaAcceptNudge(id), {
+        reply_markup: deliveryEtaKeyboard(id),
+      });
+    }
   }
 
   /** Redraws the order message to reflect the current status and buttons. */
@@ -233,9 +262,10 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
     // Reset any unfinished editing: re-entering /prices cancels the pending input
     // (otherwise the next number would go into the previous field/order).
     ctx.session.editingPriceField = undefined;
-    ctx.session.editingOrderId = undefined;
+    ctx.session.editingOrder = undefined;
     ctx.session.editingClaimOrderId = undefined;
     ctx.session.geoTaggingOrderId = undefined;
+    ctx.session.deliveryNoteOrderId = undefined;
     ctx.session.lookupClient = undefined;
     const prices = await this.pricingSettings.getCurrent();
     await ctx.reply(pricesMessage(prices), { reply_markup: pricesKeyboard() });
@@ -246,9 +276,10 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
     await ctx.answerCallbackQuery();
     const field = ctx.match?.[1] as EditablePriceField | undefined;
     if (!field) return;
-    ctx.session.editingOrderId = undefined; // input modes are mutually exclusive
+    ctx.session.editingOrder = undefined; // input modes are mutually exclusive
     ctx.session.editingClaimOrderId = undefined;
     ctx.session.geoTaggingOrderId = undefined;
+    ctx.session.deliveryNoteOrderId = undefined;
     ctx.session.lookupClient = undefined;
     ctx.session.editingPriceField = field;
     await ctx.reply(
@@ -266,17 +297,46 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
     await ctx.editMessageText('Зміну ціни скасовано.');
   }
 
-  /** "✏️ Edit": remember the order and wait for the new bottle quantity as text. */
+  /** "✏️ Змінити": open the sub-menu to pick WHICH field of the order to edit. */
   private async onEditOrder(ctx: DispatcherContext): Promise<void> {
     await ctx.answerCallbackQuery();
     const id = ctx.match?.[1];
     if (!id) return;
+    await ctx.reply(editMenuPrompt(id), {
+      reply_markup: editMenuKeyboard(id),
+    });
+  }
+
+  /**
+   * Field picked in the edit sub-menu: remember the order + field and wait for the
+   * new value as text. Replaces the menu with the field prompt (no dangling buttons).
+   */
+  private async onPickEditField(ctx: DispatcherContext): Promise<void> {
+    await ctx.answerCallbackQuery();
+    const field = ctx.match?.[1] as OrderEditField | undefined;
+    const id = ctx.match?.[2];
+    if (!field || !id) return;
     ctx.session.editingPriceField = undefined; // input modes are mutually exclusive
     ctx.session.editingClaimOrderId = undefined;
     ctx.session.geoTaggingOrderId = undefined;
+    ctx.session.deliveryNoteOrderId = undefined;
     ctx.session.lookupClient = undefined;
-    ctx.session.editingOrderId = id;
-    await ctx.reply(editQuantityPrompt(id));
+    ctx.session.editingOrder = { id, field };
+    const prompt =
+      field === 'qty'
+        ? editQuantityPrompt(id)
+        : field === 'addr'
+          ? editAddressPrompt(id)
+          : editCommentPrompt(id);
+    // editMessageText replaces the menu and drops its inline keyboard.
+    await ctx.editMessageText(prompt);
+  }
+
+  /** "❌ Скасувати" in the edit sub-menu: drop the menu and reset editing. */
+  private async onCancelOrderEdit(ctx: DispatcherContext): Promise<void> {
+    await ctx.answerCallbackQuery();
+    ctx.session.editingOrder = undefined;
+    await ctx.editMessageText('Редагування скасовано.');
   }
 
   /**
@@ -289,8 +349,9 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
     const id = ctx.match?.[1];
     if (!id) return;
     ctx.session.editingPriceField = undefined; // input modes are mutually exclusive
-    ctx.session.editingOrderId = undefined;
+    ctx.session.editingOrder = undefined;
     ctx.session.geoTaggingOrderId = undefined;
+    ctx.session.deliveryNoteOrderId = undefined;
     ctx.session.lookupClient = undefined;
     ctx.session.editingClaimOrderId = id;
     await ctx.reply(editClaimPrompt(id));
@@ -306,11 +367,70 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
     const id = ctx.match?.[1];
     if (!id) return;
     ctx.session.editingPriceField = undefined; // input modes are mutually exclusive
-    ctx.session.editingOrderId = undefined;
+    ctx.session.editingOrder = undefined;
     ctx.session.editingClaimOrderId = undefined;
+    ctx.session.deliveryNoteOrderId = undefined;
     ctx.session.lookupClient = undefined;
     ctx.session.geoTaggingOrderId = id;
     await ctx.reply(geoTagPrompt(id));
+  }
+
+  /**
+   * "🕒 Час доставки": open the delivery-timing picker for the client. Sent as a NEW
+   * message (the card keeps its buttons); presets set the note directly, "✏️ Свій
+   * варіант" switches to text input. Also used as the accept nudge (variant B).
+   */
+  private async onDeliveryEtaStart(ctx: DispatcherContext): Promise<void> {
+    await ctx.answerCallbackQuery();
+    const id = ctx.match?.[1];
+    if (!id) return;
+    await ctx.reply(deliveryEtaPrompt(id), {
+      reply_markup: deliveryEtaKeyboard(id),
+    });
+  }
+
+  /**
+   * A delivery-timing preset was picked: store it on the order (which pushes the
+   * client via the delivery-note event) and turn this picker message into a
+   * confirmation. Unknown key / inactive order → a graceful message, no crash.
+   */
+  private async onPickDeliveryPreset(ctx: DispatcherContext): Promise<void> {
+    await ctx.answerCallbackQuery();
+    const key = ctx.match?.[1];
+    const id = ctx.match?.[2];
+    if (!key || !id) return;
+    const note = deliveryEtaPreset(key);
+    if (!note) return;
+    try {
+      await this.orders.setDeliveryNote(id, note);
+    } catch {
+      await ctx.editMessageText(
+        'Це замовлення вже не активне — час не надіслано.',
+      );
+      return;
+    }
+    await ctx.editMessageText(deliveryEtaSent(id, note));
+  }
+
+  /** "✏️ Свій варіант" in the picker: wait for a custom timing message as text. */
+  private async onDeliveryEtaCustom(ctx: DispatcherContext): Promise<void> {
+    await ctx.answerCallbackQuery();
+    const id = ctx.match?.[1];
+    if (!id) return;
+    ctx.session.editingPriceField = undefined; // input modes are mutually exclusive
+    ctx.session.editingOrder = undefined;
+    ctx.session.editingClaimOrderId = undefined;
+    ctx.session.geoTaggingOrderId = undefined;
+    ctx.session.lookupClient = undefined;
+    ctx.session.deliveryNoteOrderId = id;
+    await ctx.editMessageText(deliveryEtaCustomPrompt(id));
+  }
+
+  /** "❌ Скасувати" in the picker: drop it without sending anything. */
+  private async onDeliveryEtaCancel(ctx: DispatcherContext): Promise<void> {
+    await ctx.answerCallbackQuery();
+    ctx.session.deliveryNoteOrderId = undefined;
+    await ctx.editMessageText('Скасовано.');
   }
 
   /**
@@ -319,9 +439,10 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
    */
   private async onClientLookupStart(ctx: DispatcherContext): Promise<void> {
     ctx.session.editingPriceField = undefined; // input modes are mutually exclusive
-    ctx.session.editingOrderId = undefined;
+    ctx.session.editingOrder = undefined;
     ctx.session.editingClaimOrderId = undefined;
     ctx.session.geoTaggingOrderId = undefined;
+    ctx.session.deliveryNoteOrderId = undefined;
     const arg = ctx.match;
     const query = typeof arg === 'string' ? arg.trim() : '';
     if (query) {
@@ -419,9 +540,9 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
         // Phone typed after "🔎 Клієнт" — search and show client card(s).
         await this.applyClientLookup(ctx, text);
         return;
-      case 'edit-quantity':
-        // New quantity input for an order (✏️ Edit) — priority over price.
-        await this.applyEditedQuantity(ctx, intent.orderId, text);
+      case 'edit-order':
+        // New value for the picked field of an order (✏️ Edit) — priority over price.
+        await this.applyOrderEdit(ctx, intent.orderId, intent.field, text);
         return;
       case 'edit-claim':
         // Corrected declared balance for an OWN_TARA order (🔢 step B).
@@ -439,6 +560,10 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
         await this.applySetGeo(ctx, intent.orderId, coords.lat, coords.lng);
         return;
       }
+      case 'set-delivery-note':
+        // Custom delivery-timing message typed after "🕒 ✏️ Свій варіант".
+        await this.applyDeliveryNote(ctx, intent.orderId, text);
+        return;
       case 'edit-price': {
         const parsed = parsePriceValue(text);
         if (!parsed.ok) {
@@ -460,6 +585,40 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+  /**
+   * Applies an order edit by the picked field. Quantity has its own parse/bounds path;
+   * address and comment take the trimmed text as-is (non-empty by onText's guard). The
+   * client is notified from the service via the order-edited event.
+   */
+  private async applyOrderEdit(
+    ctx: DispatcherContext,
+    orderId: string,
+    field: OrderEditField,
+    text: string,
+  ): Promise<void> {
+    if (field === 'qty') {
+      await this.applyEditedQuantity(ctx, orderId, text);
+      return;
+    }
+    let view: OrderWithRelations;
+    try {
+      view =
+        field === 'addr'
+          ? await this.orders.editOrderAddress(orderId, text)
+          : await this.orders.editOrderComment(orderId, text);
+    } catch {
+      // Order already delivered/cancelled/deleted — editing unavailable.
+      ctx.session.editingOrder = undefined;
+      await ctx.reply('Це замовлення вже не можна змінити.');
+      return;
+    }
+    ctx.session.editingOrder = undefined;
+    await ctx.reply(
+      `Змінено ✅\n\n${orderMessage(view, view.client, view.address)}`,
+      { reply_markup: orderKeyboard(view.id, view.status, view.kind) },
+    );
+  }
+
   /** Parses the quantity and applies the order edit; on error — wait again. */
   private async applyEditedQuantity(
     ctx: DispatcherContext,
@@ -478,11 +637,11 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
       view = await this.orders.editQuantity(orderId, parsed.value);
     } catch {
       // Order already delivered/cancelled/deleted — editing unavailable.
-      ctx.session.editingOrderId = undefined;
+      ctx.session.editingOrder = undefined;
       await ctx.reply('Це замовлення вже не можна змінити.');
       return;
     }
-    ctx.session.editingOrderId = undefined;
+    ctx.session.editingOrder = undefined;
     await ctx.reply(
       `Змінено ✅\n\n${orderMessage(view, view.client, view.address)}`,
       { reply_markup: orderKeyboard(view.id, view.status, view.kind) },
@@ -537,14 +696,37 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
     } catch {
       // Order deleted / no longer available.
       ctx.session.geoTaggingOrderId = undefined;
+      ctx.session.deliveryNoteOrderId = undefined;
       await ctx.reply('Не вдалося прив’язати точку до цього замовлення.');
       return;
     }
     ctx.session.geoTaggingOrderId = undefined;
+    ctx.session.deliveryNoteOrderId = undefined;
     await ctx.reply(
       `Точку збережено ✅\n\n${orderMessage(view, view.client, view.address)}`,
       { reply_markup: orderKeyboard(view.id, view.status, view.kind) },
     );
+  }
+
+  /**
+   * Stores a custom delivery-timing message on the order (which pushes the client via
+   * the delivery-note event) and confirms to the dispatcher. On an inactive order —
+   * a graceful message; the input mode is cleared either way.
+   */
+  private async applyDeliveryNote(
+    ctx: DispatcherContext,
+    orderId: string,
+    text: string,
+  ): Promise<void> {
+    try {
+      await this.orders.setDeliveryNote(orderId, text);
+    } catch {
+      ctx.session.deliveryNoteOrderId = undefined;
+      await ctx.reply('Це замовлення вже не активне — час не надіслано.');
+      return;
+    }
+    ctx.session.deliveryNoteOrderId = undefined;
+    await ctx.reply(deliveryEtaSent(orderId, text));
   }
 
   /** /stats — summary for today and this week (SPEC §7). */

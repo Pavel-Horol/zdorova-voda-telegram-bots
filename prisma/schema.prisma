@@ -92,6 +92,14 @@ model Order {
   /// (deferred commit / verification — PRODUCT.md). Also drives the dispatcher "verify
   /// N bottles" mark.
   claimedOnHand Int?
+  /// Client note about THIS order (entered at ordering, optional): one-off info for
+  /// the dispatcher/driver, e.g. "мене не буде з 14 до 16". Distinct from
+  /// Address.comment (a permanent hint about the delivery point, reused across orders).
+  note         String?
+  /// Last delivery-timing message the dispatcher sent the client about this order
+  /// (e.g. "сьогодні", "перенесено на завтра"). Updatable; each change pushes the
+  /// client and is echoed on the dispatcher card. Null until the dispatcher sets one.
+  deliveryNote String?
   /// Frozen order total in UAH (integer, no kopecks).
   totalPrice   Int
   status       OrderStatus @default(CREATED)

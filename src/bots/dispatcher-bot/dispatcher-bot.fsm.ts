@@ -12,23 +12,34 @@ export const BTN_PRICES = '💰 Ціни';
 export const BTN_STATS = '📊 Статистика';
 export const BTN_CLIENT = '🔎 Клієнт';
 
+/**
+ * Which field of an order the dispatcher chose to edit (✏️ Змінити → sub-menu):
+ * bottle quantity, delivery address text or the address comment. Geo point and the
+ * OWN_TARA claim have their own dedicated buttons on the card, not this menu.
+ */
+export type OrderEditField = 'qty' | 'addr' | 'comment';
+
 /** Intent the incoming dispatcher text reduces to. Execution — in the handler. */
 export type DispatcherTextIntent =
   | { kind: 'menu'; action: 'orders' | 'prices' | 'stats' | 'client' }
-  | { kind: 'edit-quantity'; orderId: string }
+  | { kind: 'edit-order'; orderId: string; field: OrderEditField }
   | { kind: 'edit-claim'; orderId: string }
   | { kind: 'set-geo'; orderId: string }
+  | { kind: 'set-delivery-note'; orderId: string }
   | { kind: 'lookup-client' }
   | { kind: 'edit-price'; field: EditablePriceField }
   | { kind: 'ignore' };
 
 /** Active text input mode (part of the dispatcher session). Modes are exclusive. */
 export interface DispatcherInputState {
-  editingOrderId?: string;
+  /** The order + which field the dispatcher is editing (✏️ Змінити sub-menu). */
+  editingOrder?: { id: string; field: OrderEditField };
   /** Correcting the self-declared bottle balance of an OWN_TARA order (step B). */
   editingClaimOrderId?: string;
   /** Attaching delivery coordinates to an order's address (geo-tagging). */
   geoTaggingOrderId?: string;
+  /** Awaiting a custom delivery-timing message for the client (🕒 ✏️ Свій варіант). */
+  deliveryNoteOrderId?: string;
   /** Awaiting a phone number to look a client up (🔎 Клієнт). */
   lookupClient?: boolean;
   editingPriceField?: EditablePriceField;
@@ -57,14 +68,21 @@ export function routeDispatcherText(
     default:
       break;
   }
-  if (state.editingOrderId) {
-    return { kind: 'edit-quantity', orderId: state.editingOrderId };
+  if (state.editingOrder) {
+    return {
+      kind: 'edit-order',
+      orderId: state.editingOrder.id,
+      field: state.editingOrder.field,
+    };
   }
   if (state.editingClaimOrderId) {
     return { kind: 'edit-claim', orderId: state.editingClaimOrderId };
   }
   if (state.geoTaggingOrderId) {
     return { kind: 'set-geo', orderId: state.geoTaggingOrderId };
+  }
+  if (state.deliveryNoteOrderId) {
+    return { kind: 'set-delivery-note', orderId: state.deliveryNoteOrderId };
   }
   if (state.lookupClient) {
     return { kind: 'lookup-client' };

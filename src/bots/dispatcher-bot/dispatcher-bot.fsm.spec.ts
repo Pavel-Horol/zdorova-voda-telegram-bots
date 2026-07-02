@@ -25,7 +25,7 @@ describe('routeDispatcherText', () => {
     });
     expect(
       routeDispatcherText(BTN_ORDERS, {
-        editingOrderId: 'o1',
+        editingOrder: { id: 'o1', field: 'qty' },
         editingPriceField: 'price1',
       }),
     ).toEqual({ kind: 'menu', action: 'orders' });
@@ -44,20 +44,29 @@ describe('routeDispatcherText', () => {
     });
   });
 
-  it('quantity editing has priority over price editing (mutually exclusive modes)', () => {
+  it('order editing has priority over price editing (mutually exclusive modes)', () => {
     expect(
       routeDispatcherText('5', {
-        editingOrderId: 'o1',
+        editingOrder: { id: 'o1', field: 'qty' },
         editingPriceField: 'price1',
       }),
-    ).toEqual({ kind: 'edit-quantity', orderId: 'o1' });
+    ).toEqual({ kind: 'edit-order', orderId: 'o1', field: 'qty' });
   });
 
-  it('only quantity editing is active → edit-quantity', () => {
-    expect(routeDispatcherText('5', { editingOrderId: 'o42' })).toEqual({
-      kind: 'edit-quantity',
-      orderId: 'o42',
-    });
+  it('only order editing is active → edit-order (carries the picked field)', () => {
+    expect(
+      routeDispatcherText('5', { editingOrder: { id: 'o42', field: 'qty' } }),
+    ).toEqual({ kind: 'edit-order', orderId: 'o42', field: 'qty' });
+    expect(
+      routeDispatcherText('вул. Нова 5', {
+        editingOrder: { id: 'o42', field: 'addr' },
+      }),
+    ).toEqual({ kind: 'edit-order', orderId: 'o42', field: 'addr' });
+    expect(
+      routeDispatcherText('код 42', {
+        editingOrder: { id: 'o42', field: 'comment' },
+      }),
+    ).toEqual({ kind: 'edit-order', orderId: 'o42', field: 'comment' });
   });
 
   it('only claim editing is active → edit-claim (step B)', () => {
@@ -80,6 +89,14 @@ describe('routeDispatcherText', () => {
     expect(
       routeDispatcherText('49.42, 26.99', { geoTaggingOrderId: 'o9' }),
     ).toEqual({ kind: 'set-geo', orderId: 'o9' });
+  });
+
+  it('only delivery-note input is active → set-delivery-note', () => {
+    expect(
+      routeDispatcherText('завтра після обіду', {
+        deliveryNoteOrderId: 'o11',
+      }),
+    ).toEqual({ kind: 'set-delivery-note', orderId: 'o11' });
   });
 
   it('"Client" button → client lookup menu', () => {

@@ -19,7 +19,11 @@ import { OrdersService } from '../../modules/orders/orders.service';
 import { PricingSettingsService } from '../../modules/pricing-settings/pricing-settings.service';
 import {
   ORDER_STATUS_CHANGED,
+  ORDER_EDITED,
+  ORDER_DELIVERY_NOTE,
   type OrderStatusChangedEvent,
+  type OrderEditedEvent,
+  type OrderDeliveryNoteEvent,
 } from '../../modules/orders/order-events';
 import type { Address, Client, Order } from '../../../generated/prisma/client';
 import { OrderStatus } from '../../../generated/prisma/enums';
@@ -52,6 +56,7 @@ const ORDER_FLOW_STEPS: readonly Step[] = [
   Step.ChooseQty,
   Step.Confirm,
   Step.EditMenu,
+  Step.AwaitOrderNote,
 ];
 
 interface SessionData {
@@ -79,6 +84,12 @@ interface SessionData {
   electro?: boolean;
   /** Pump add-on for own bottles (T5, answer "no pump"). */
   pumpAddon?: boolean;
+  /**
+   * Optional client note about this order ("➕ Коментар до замовлення" on Confirm),
+   * e.g. an availability window. Carried until the order is created; distinct from the
+   * address comment (a permanent hint about the point). Cleared on resetSession.
+   */
+  orderNote?: string;
   /**
    * Edit mode: the client opened "✏️ Змінити" on Confirm and is changing a single
    * field. While true, field-input handlers return to Confirm instead of continuing
@@ -108,6 +119,9 @@ const CB_CANCEL = 'nav:cancel';
 const CB_SKIP = 'nav:skip';
 const CB_EDIT = 'nav:edit';
 const CB_EDIT_BACK = 'nav:editback';
+const CB_NOTE_ADD = 'note:add';
+const CB_NOTE_BACK = 'note:back';
+const CB_NOTE_CLEAR = 'note:clear';
 
 // Reply button labels of the main menu (also the keys of the text router).
 const BTN_ORDER = '🚰 Замовити воду';
@@ -183,12 +197,31 @@ const commentKeyboard = new InlineKeyboard()
   .text('⏭ Пропустити', CB_SKIP)
   .text('❌ Скасувати', CB_CANCEL);
 
-/** Order confirmation: confirm / edit (opens the edit menu) / cancel (SPEC §6). */
-const confirmKeyboard = new InlineKeyboard()
-  .text('✅ Усе вірно, замовляю', CB_CONFIRM_YES)
-  .row()
-  .text('✏️ Змінити', CB_EDIT)
-  .text('❌ Скасувати', CB_CANCEL);
+/**
+ * Order confirmation: confirm / edit / cancel + an order-note row (SPEC §6). The note
+ * button label reflects whether a note is already set (add vs change), so the client
+ * sees their note is saved without re-reading the whole screen.
+ */
+function buildConfirmKeyboard(hasNote: boolean): InlineKeyboard {
+  return new InlineKeyboard()
+    .text('✅ Усе вірно, замовляю', CB_CONFIRM_YES)
+    .row()
+    .text(
+      hasNote ? '📝 Коментар до замовлення ✅' : '➕ Коментар до замовлення',
+      CB_NOTE_ADD,
+    )
+    .row()
+    .text('✏️ Змінити', CB_EDIT)
+    .text('❌ Скасувати', CB_CANCEL);
+}
+
+/** Under the order-note prompt: back to Confirm, and clear the note if one is set. */
+function buildOrderNoteKeyboard(hasNote: boolean): InlineKeyboard {
+  const kb = new InlineKeyboard();
+  if (hasNote) kb.text('🗑 Прибрати коментар', CB_NOTE_CLEAR).row();
+  kb.text('◀ Назад', CB_NOTE_BACK);
+  return kb;
+}
 
 /**
  * Edit menu (from "✏️ Змінити" on Confirm): pick the field to change. After editing,
@@ -308,6 +341,47 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+  /**
+   * Notifies the client that the dispatcher edited their order (quantity / address /
+   * comment). Same fire-and-forget contract as {@link onOrderStatusChanged}: any send
+   * failure is logged, never rethrown (CLAUDE.md rule 9/10).
+   */
+  @OnEvent(ORDER_EDITED)
+  async onOrderEdited(event: OrderEditedEvent): Promise<void> {
+    if (!this.bot) return;
+    const text = texts.orderEdited(event.order);
+    try {
+      const client = await this.clients.getById(event.order.clientId);
+      if (!client) return;
+      await this.bot.api.sendMessage(String(client.telegramId), text);
+    } catch (err) {
+      this.logger.warn(
+        `failed to notify client about edited order ${event.order.id}: ${(err as Error).message}`,
+      );
+    }
+  }
+
+  /**
+   * Notifies the client about the delivery-timing message the dispatcher set for their
+   * order (🕒 "сьогодні" / "перенесено на завтра" / …). Same fire-and-forget contract
+   * as {@link onOrderStatusChanged}. A blank note yields no text — nothing is sent.
+   */
+  @OnEvent(ORDER_DELIVERY_NOTE)
+  async onOrderDeliveryNote(event: OrderDeliveryNoteEvent): Promise<void> {
+    if (!this.bot) return;
+    const text = texts.deliveryNoteUpdate(event.order);
+    if (!text) return;
+    try {
+      const client = await this.clients.getById(event.order.clientId);
+      if (!client) return;
+      await this.bot.api.sendMessage(String(client.telegramId), text);
+    } catch (err) {
+      this.logger.warn(
+        `failed to notify client about delivery note for order ${event.order.id}: ${(err as Error).message}`,
+      );
+    }
+  }
+
   private registerHandlers(bot: Bot<BotContext>): void {
     bot.command('start', (ctx) => this.onStart(ctx));
     // TEMP self-delete (test only) — remove this line and onDeleteMyself below.
@@ -322,6 +396,9 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
     bot.callbackQuery(CB_CONFIRM_YES, (ctx) => this.onConfirmYes(ctx));
     bot.callbackQuery(CB_EDIT, (ctx) => this.onEdit(ctx));
     bot.callbackQuery(CB_EDIT_BACK, (ctx) => this.onEditBack(ctx));
+    bot.callbackQuery(CB_NOTE_ADD, (ctx) => this.onAddOrderNote(ctx));
+    bot.callbackQuery(CB_NOTE_BACK, (ctx) => this.onOrderNoteBack(ctx));
+    bot.callbackQuery(CB_NOTE_CLEAR, (ctx) => this.onOrderNoteClear(ctx));
     bot.callbackQuery(/^ed:(qty|addr|comment|pump)$/, (ctx) =>
       this.onEditChoice(ctx),
     );
@@ -444,6 +521,8 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
       await this.finalizeAddress(ctx, text);
     } else if (ctx.session.step === Step.OwnTaraCount) {
       await this.onOwnTaraCountInput(ctx, text);
+    } else if (ctx.session.step === Step.AwaitOrderNote) {
+      await this.onOrderNoteInput(ctx, text);
     }
   }
 
@@ -457,7 +536,8 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
     if (
       step === Step.AwaitAddress ||
       step === Step.AwaitComment ||
-      step === Step.OwnTaraCount
+      step === Step.OwnTaraCount ||
+      step === Step.AwaitOrderNote
     ) {
       await ctx.reply(texts.sendAsText);
     }
@@ -812,11 +892,12 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
       pumpAddon: ctx.session.pumpAddon,
       claimedOnHand: ctx.session.claimedOnHand,
     };
+    const note = ctx.session.orderNote;
     // Leave Confirm BEFORE creating the order — a repeat tap won't create a dupe.
     this.resetSession(ctx, Step.MainMenu);
 
     try {
-      await this.orders.createOrder(client.id, bottles, pumpOpts);
+      await this.orders.createOrder(client.id, bottles, pumpOpts, note);
     } catch (err) {
       // Creation failure (DB/race) — don't stay silent: the client must understand
       // the order was not placed and retry (quantity already reset — they re-order).
@@ -889,6 +970,37 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
       return;
     }
     await this.renderConfirm(ctx, client.id, address);
+  }
+
+  /**
+   * "➕ Коментар до замовлення" on Confirm: open the note prompt. A side-branch off
+   * Confirm (like the edit menu) — the text handler saves the note and returns here.
+   */
+  private async onAddOrderNote(ctx: BotContext): Promise<void> {
+    await ctx.answerCallbackQuery();
+    if (ctx.session.step !== Step.Confirm) return;
+    await this.renderOrderNotePrompt(ctx);
+  }
+
+  /** Order-note text entered (AWAIT_ORDER_NOTE): save it and return to Confirm. */
+  private async onOrderNoteInput(ctx: BotContext, text: string): Promise<void> {
+    ctx.session.orderNote = text;
+    await this.returnToConfirm(ctx);
+  }
+
+  /** "◀ Назад" under the note prompt: return to Confirm without changing the note. */
+  private async onOrderNoteBack(ctx: BotContext): Promise<void> {
+    await ctx.answerCallbackQuery();
+    if (ctx.session.step !== Step.AwaitOrderNote) return;
+    await this.returnToConfirm(ctx);
+  }
+
+  /** "🗑 Прибрати коментар" under the note prompt: clear the note and return to Confirm. */
+  private async onOrderNoteClear(ctx: BotContext): Promise<void> {
+    await ctx.answerCallbackQuery();
+    if (ctx.session.step !== Step.AwaitOrderNote) return;
+    ctx.session.orderNote = undefined;
+    await this.returnToConfirm(ctx);
   }
 
   /** "Back" on the quantity screen: one step back along the history stack. */
@@ -1055,6 +1167,15 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
     );
   }
 
+  private async renderOrderNotePrompt(ctx: BotContext): Promise<void> {
+    ctx.session.step = Step.AwaitOrderNote;
+    await this.replyInline(
+      ctx,
+      texts.orderNotePrompt,
+      buildOrderNoteKeyboard(!!ctx.session.orderNote),
+    );
+  }
+
   private async renderConfirm(
     ctx: BotContext,
     clientId: string,
@@ -1073,7 +1194,11 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
     // Reaching Confirm ends any single-field edit (covers the edit-quantity path too).
     ctx.session.editing = false;
     ctx.session.step = Step.Confirm;
-    await this.replyInline(ctx, texts.confirm(quote, address), confirmKeyboard);
+    await this.replyInline(
+      ctx,
+      texts.confirm(quote, address, ctx.session.orderNote),
+      buildConfirmKeyboard(!!ctx.session.orderNote),
+    );
   }
 
   // --- Sending screens with cleanup of hanging inline buttons ----------------
@@ -1134,6 +1259,7 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
     ctx.session.claimedOnHand = undefined;
     ctx.session.electro = undefined;
     ctx.session.pumpAddon = undefined;
+    ctx.session.orderNote = undefined;
     ctx.session.editing = undefined;
     ctx.session.managingAddress = undefined;
     ctx.session.history = [];

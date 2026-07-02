@@ -65,5 +65,23 @@ describe('PricingSettingsService', () => {
       expect(() => service.update('pumpPrice', -5)).toThrow();
       expect(prisma.priceSettings.update).not.toHaveBeenCalled();
     });
+
+    it('throws on a fractional value and does not write to the DB', () => {
+      expect(() => service.update('pumpPrice', 99.9)).toThrow(
+        /non-negative integer/,
+      );
+      expect(prisma.priceSettings.update).not.toHaveBeenCalled();
+    });
+
+    it('allows 0 (e.g. a free pump / delivery)', async () => {
+      const updated = { ...row, pumpPrice: 0 };
+      prisma.priceSettings.update.mockResolvedValue(updated);
+
+      await expect(service.update('pumpPrice', 0)).resolves.toEqual(updated);
+      expect(prisma.priceSettings.update).toHaveBeenCalledWith({
+        where: { id: 1 },
+        data: { pumpPrice: 0 },
+      });
+    });
   });
 });

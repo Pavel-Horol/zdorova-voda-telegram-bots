@@ -10,7 +10,11 @@ import {
 } from '../../bots/shared/order-dispatcher';
 import {
   ORDER_STATUS_CHANGED,
+  ORDER_EDITED,
+  ORDER_DELIVERY_NOTE,
   type OrderStatusChangedEvent,
+  type OrderEditedEvent,
+  type OrderDeliveryNoteEvent,
 } from './order-events';
 import { OrderStatus, OrderKind } from '../../../generated/prisma/enums';
 import type { Order, Client, Address } from '../../../generated/prisma/client';
@@ -179,6 +183,7 @@ export class OrdersService {
     clientId: string,
     bottles: number,
     opts: PumpOptions = {},
+    note?: string | null,
   ): Promise<Order> {
     const client = await this.clients.getById(clientId);
     if (!client) {
@@ -192,10 +197,7 @@ export class OrdersService {
 
     // A self-declared claim is meaningful only when positive; 0/negative means "no
     // bottles" (STARTER_KIT) and must never flag review or commit a zero balance.
-    const claimedOnHand =
-      opts.claimedOnHand != null && opts.claimedOnHand > 0
-        ? opts.claimedOnHand
-        : undefined;
+    const claimedOnHand = this.normalizeClaim(opts.claimedOnHand);
     const kind = await this.deriveKind(client, claimedOnHand);
     const prices = await this.pricingSettings.getCurrent();
     // For an OWN_TARA first order the balance is not committed yet (deferred commit) —
@@ -223,6 +225,9 @@ export class OrdersService {
         pumpAddon: opts.pumpAddon ?? false,
         // Self-declared balance to verify and commit on acceptance (OWN_TARA only).
         claimedOnHand: claimedOnHand ?? null,
+        // Optional client note about this order (e.g. availability window). Does not
+        // affect pricing — kept separate from the pump/tara opts.
+        note: note ?? null,
         totalPrice,
         status: OrderStatus.CREATED,
       },
@@ -265,12 +270,15 @@ export class OrdersService {
     opts: PumpOptions = {},
   ): Promise<OrderQuote> {
     const client = await this.clients.getById(clientId);
+    // Normalize identically to createOrder so the preview can never diverge from the
+    // charged total (0/negative claim → undefined, i.e. "no bottles").
+    const claimedOnHand = this.normalizeClaim(opts.claimedOnHand);
     const kind = client
-      ? await this.deriveKind(client, opts.claimedOnHand)
+      ? await this.deriveKind(client, claimedOnHand)
       : OrderKind.STARTER_KIT;
     // Mirror createOrder: an OWN_TARA claim is not committed yet, so quote off the
     // self-declared count; otherwise off the client's balance.
-    const bottlesOnHand = opts.claimedOnHand ?? client?.bottlesOnHand ?? 0;
+    const bottlesOnHand = claimedOnHand ?? client?.bottlesOnHand ?? 0;
     const prices = await this.pricingSettings.getCurrent();
     const totalPrice = this.pricing.calculateTotal(
       bottles,
@@ -331,11 +339,96 @@ export class OrdersService {
     // Editing is allowed only before delivery, so bottlesOnHand is still the
     // pre-delivery value — re-snapshot newTara for the new quantity.
     const newTara = this.pricing.newTara(bottles, order.kind, bottlesOnHand);
-    return this.prisma.order.update({
+    const updated = await this.prisma.order.update({
       where: { id: orderId },
       data: { bottles, newTara, totalPrice },
       include: { client: true, address: true },
     });
+    this.emitEdited(updated);
+    return updated;
+  }
+
+  /**
+   * Dispatcher edit of the delivery address TEXT of an active order (✏️ → 📍 Адресу).
+   * The text is stored on the shared Address (reused across the client's orders, like
+   * geo-tagging) — a typo fix propagates to the client's future orders too, which is
+   * the intended behaviour. Allowed only for created/accepted. Notifies the client.
+   */
+  async editOrderAddress(
+    orderId: string,
+    raw: string,
+  ): Promise<OrderWithRelations> {
+    const order = await this.requireEditableOrder(orderId);
+    await this.prisma.address.update({
+      where: { id: order.addressId },
+      data: { raw },
+    });
+    const updated = await this.prisma.order.findUniqueOrThrow({
+      where: { id: orderId },
+      include: { client: true, address: true },
+    });
+    this.emitEdited(updated);
+    return updated;
+  }
+
+  /**
+   * Dispatcher edit of the address COMMENT of an active order (✏️ → 📝 Коментар).
+   * Stored on the shared Address like {@link editOrderAddress}. Allowed only for
+   * created/accepted. Notifies the client.
+   */
+  async editOrderComment(
+    orderId: string,
+    comment: string,
+  ): Promise<OrderWithRelations> {
+    const order = await this.requireEditableOrder(orderId);
+    await this.prisma.address.update({
+      where: { id: order.addressId },
+      data: { comment },
+    });
+    const updated = await this.prisma.order.findUniqueOrThrow({
+      where: { id: orderId },
+      include: { client: true, address: true },
+    });
+    this.emitEdited(updated);
+    return updated;
+  }
+
+  /**
+   * Dispatcher sets/updates the delivery-timing message shown to the client (🕒):
+   * "сьогодні", "перенесено на завтра", "протягом години", … Stored on the order
+   * (last message wins) and pushed to the client via the delivery-note event. Allowed
+   * only while the order is active (created/accepted) — a delivered/cancelled order has
+   * no pending delivery to reschedule.
+   */
+  async setDeliveryNote(
+    orderId: string,
+    deliveryNote: string,
+  ): Promise<OrderWithRelations> {
+    await this.requireEditableOrder(orderId);
+    const updated = await this.prisma.order.update({
+      where: { id: orderId },
+      data: { deliveryNote },
+      include: { client: true, address: true },
+    });
+    this.emitDeliveryNote(updated);
+    return updated;
+  }
+
+  /**
+   * Loads an order and asserts it is still editable by the dispatcher (created/
+   * accepted — not delivered/cancelled). Shared guard for the content-edit methods.
+   */
+  private async requireEditableOrder(orderId: string): Promise<Order> {
+    const order = await this.prisma.order.findUniqueOrThrow({
+      where: { id: orderId },
+    });
+    if (
+      order.status !== OrderStatus.CREATED &&
+      order.status !== OrderStatus.ACCEPTED
+    ) {
+      throw new Error(`cannot edit order ${orderId} in status ${order.status}`);
+    }
+    return order;
   }
 
   /**
@@ -505,6 +598,25 @@ export class OrdersService {
   }
 
   /**
+   * Notifies subscribers that the dispatcher edited an order's content (quantity /
+   * address / comment) — the client bot tells the client. Fire-and-forget, like
+   * {@link emitStatusChanged}: the listener swallows its own errors.
+   */
+  private emitEdited(order: Order): void {
+    const payload: OrderEditedEvent = { order };
+    this.events.emit(ORDER_EDITED, payload);
+  }
+
+  /**
+   * Notifies subscribers that the dispatcher set a delivery-timing message for the
+   * client — the client bot pushes it. Fire-and-forget, like the other order events.
+   */
+  private emitDeliveryNote(order: Order): void {
+    const payload: OrderDeliveryNoteEvent = { order };
+    this.events.emit(ORDER_DELIVERY_NOTE, payload);
+  }
+
+  /**
    * Cancellation of an order by the client themselves from the bot (SPEC §9).
    * Allowed only while the dispatcher has not accepted (CREATED status) and only for
    * their own order (owner check by clientId — a callback can be forged, CLAUDE.md
@@ -551,6 +663,18 @@ export class OrdersService {
       where: { clientId, status: { not: OrderStatus.CANCELLED } },
     });
     return activeCount === 0;
+  }
+
+  /**
+   * Normalizes a self-declared bottle claim: only a positive count is a real OWN_TARA
+   * declaration; 0/negative/undefined all mean "no bottles" → undefined. Single source
+   * of truth shared by quote() and createOrder() so the preview and the charged total
+   * derive the kind and tara math from identical inputs (no divergence on edge values).
+   */
+  private normalizeClaim(claimedOnHand?: number): number | undefined {
+    return claimedOnHand != null && claimedOnHand > 0
+      ? claimedOnHand
+      : undefined;
   }
 
   /**

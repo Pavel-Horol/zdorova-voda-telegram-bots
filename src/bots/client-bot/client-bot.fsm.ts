@@ -16,6 +16,8 @@ export enum Step {
   ChooseQty = 'CHOOSE_QTY',
   Confirm = 'CONFIRM',
   EditMenu = 'EDIT_MENU',
+  /** Awaiting the optional client note about this order (from Confirm). */
+  AwaitOrderNote = 'AWAIT_ORDER_NOTE',
 }
 
 /**

@@ -120,7 +120,7 @@ export const texts = {
    * Branches on quote.kind: STARTER_KIT shows the starter-kit breakdown, the
    * rest — price per bottle. Address — raw + comment in parentheses.
    */
-  confirm(quote: OrderQuote, address: Address): string {
+  confirm(quote: OrderQuote, address: Address, note?: string | null): string {
     const word = bottlesWord(quote.bottles);
     let breakdown: string;
     if (quote.kind === OrderKind.STARTER_KIT) {
@@ -141,13 +141,19 @@ export const texts = {
     // Pump add-on for own bottles (OWN_TARA without a pump).
     if (quote.pumpAddon) breakdown += ` + помпа ${quote.pumpPrice}`;
     const comment = address.comment ? ` (${address.comment})` : '';
+    const noteLine = note ? `\n📝 ${note}` : '';
     return (
       'Хочу замовити:\n' +
       `📦 ${quote.bottles} ${word} (${breakdown})\n` +
-      `📍 ${address.raw}${comment}\n` +
+      `📍 ${address.raw}${comment}${noteLine}\n` +
       `💰 До сплати: ${quote.totalPrice} грн (готівкою водієві)`
     );
   },
+
+  /** Prompt for the optional client note about this order (from Confirm). */
+  orderNotePrompt:
+    'Напишіть коментар до замовлення (напр. «мене не буде з 14 до 16», ' +
+    '«дзвоніть за годину»):',
 
   /** ORDER_DONE (SPEC §6). */
   orderDone:
@@ -168,6 +174,30 @@ export const texts = {
       default:
         return null;
     }
+  },
+
+  /**
+   * Notify the client that the dispatcher edited their order (SPEC §7): shows the
+   * current quantity and total so a quantity/price change is visible, and works for
+   * an address/comment edit too (numbers stay the same, the message just confirms it).
+   */
+  orderEdited(order: Order): string {
+    const word = bottlesWord(order.bottles);
+    return (
+      'Ваше замовлення оновлено диспетчером 📝\n' +
+      `Зараз: ${order.bottles} ${word}, сума ${order.totalPrice} грн.`
+    );
+  },
+
+  /**
+   * Notify the client about the delivery-timing message the dispatcher set for their
+   * order (🕒): "сьогодні", "перенесено на завтра", "протягом години", … The dispatcher
+   * writes the phrase; we just wrap it. Empty/blank note → null (nothing to send).
+   */
+  deliveryNoteUpdate(order: Order): string | null {
+    const note = order.deliveryNote?.trim();
+    if (!note) return null;
+    return `🕒 Час доставки вашого замовлення: ${note}`;
   },
 
   /** Order creation failed — ask to retry (edge §9). */

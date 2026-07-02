@@ -47,12 +47,15 @@ describe('OrdersService', () => {
       create: jest.Mock;
       count: jest.Mock;
       findFirst: jest.Mock;
+      findMany: jest.Mock;
       findUnique: jest.Mock;
       findUniqueOrThrow: jest.Mock;
       update: jest.Mock;
+      aggregate: jest.Mock;
     };
     client: { update: jest.Mock };
     address: { update: jest.Mock };
+    $transaction: jest.Mock;
   };
   let clients: {
     getById: jest.Mock;
@@ -73,12 +76,15 @@ describe('OrdersService', () => {
         create: jest.fn(),
         count: jest.fn(),
         findFirst: jest.fn(),
+        findMany: jest.fn(),
         findUnique: jest.fn(),
         findUniqueOrThrow: jest.fn(),
         update: jest.fn(),
+        aggregate: jest.fn(),
       },
       client: { update: jest.fn() },
       address: { update: jest.fn() },
+      $transaction: jest.fn(),
     };
     clients = {
       getById: jest.fn().mockResolvedValue(client),
@@ -131,6 +137,7 @@ describe('OrdersService', () => {
           electro: false,
           pumpAddon: false,
           claimedOnHand: null,
+          note: null,
           totalPrice: 750,
           status: 'CREATED',
         },
@@ -159,6 +166,7 @@ describe('OrdersService', () => {
           electro: false,
           pumpAddon: false,
           claimedOnHand: null,
+          note: null,
           totalPrice: 140,
           status: 'CREATED',
         },
@@ -183,6 +191,7 @@ describe('OrdersService', () => {
           electro: false,
           pumpAddon: false,
           claimedOnHand: null,
+          note: null,
           totalPrice: 140,
           status: 'CREATED',
         },
@@ -209,6 +218,7 @@ describe('OrdersService', () => {
           electro: false,
           pumpAddon: false,
           claimedOnHand: 3,
+          note: null,
           totalPrice: 140,
           status: 'CREATED',
         },
@@ -229,6 +239,52 @@ describe('OrdersService', () => {
 
       await expect(service.createOrder('c1', 1)).rejects.toThrow();
       expect(prisma.order.create).not.toHaveBeenCalled();
+    });
+
+    it('throws if the client is not found, and no order/notification happens', async () => {
+      clients.getById.mockResolvedValue(null);
+
+      await expect(service.createOrder('missing', 1)).rejects.toThrow(
+        /client not found/,
+      );
+      expect(prisma.order.create).not.toHaveBeenCalled();
+      expect(dispatcher.notifyNewOrder).not.toHaveBeenCalled();
+    });
+
+    it('a non-positive claimedOnHand (0) is treated as "no bottles": no review flag, no claim stored', async () => {
+      // opts.claimedOnHand=0 means "starter kit", not an OWN_TARA declaration —
+      // it must never flag pendingReview nor be persisted as a claim.
+      const freshClient = { ...client, bottlesOnHand: 0, hasPump: false };
+      clients.getById.mockResolvedValue(freshClient);
+      prisma.order.count.mockResolvedValue(0);
+      prisma.order.create.mockResolvedValue({ id: 'o5', kind: 'STARTER_KIT' });
+
+      await service.createOrder('c1', 1, { claimedOnHand: 0 });
+
+      expect(prisma.order.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            kind: 'STARTER_KIT',
+            claimedOnHand: null,
+          }) as object,
+        }),
+      );
+      expect(clients.setTaraState).not.toHaveBeenCalled();
+    });
+
+    it('stores the optional client note on the order', async () => {
+      prisma.order.count.mockResolvedValue(3); // REPEAT
+      prisma.order.create.mockResolvedValue({ id: 'o6' });
+
+      await service.createOrder('c1', 2, {}, 'мене не буде з 14 до 16');
+
+      expect(prisma.order.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            note: 'мене не буде з 14 до 16',
+          }) as object,
+        }),
+      );
     });
   });
 
@@ -490,6 +546,21 @@ describe('OrdersService', () => {
       expect(prisma.order.update).not.toHaveBeenCalled();
     });
 
+    it('cancels even if the client record is gone, skipping the notification', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue({
+        id: 'o1',
+        clientId: 'c1',
+        status: 'CREATED',
+      });
+      prisma.order.update.mockResolvedValue({ id: 'o1', status: 'CANCELLED' });
+      clients.getById.mockResolvedValue(null);
+
+      await expect(service.cancelOwnOrder('o1', 'c1')).resolves.toMatchObject({
+        status: 'CANCELLED',
+      });
+      expect(dispatcher.notifyClientCancelled).not.toHaveBeenCalled();
+    });
+
     it('a dispatcher notification failure does not break the cancellation', async () => {
       prisma.order.findUniqueOrThrow.mockResolvedValue({
         id: 'o1',
@@ -540,6 +611,27 @@ describe('OrdersService', () => {
       );
     });
 
+    it('treats a missing client as 0 bottles on hand when recomputing (defensive)', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue({
+        id: 'o1',
+        status: 'CREATED',
+        kind: 'REPEAT',
+        electro: false,
+        pumpAddon: false,
+      });
+      clients.getById.mockResolvedValue(null);
+      prisma.order.update.mockResolvedValue({ id: 'o1' });
+
+      await service.editQuantity('o1', 2);
+
+      // bottlesOnHand defaults to 0 → the whole order is new tara under deposit.
+      expect(prisma.order.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: { bottles: 2, newTara: 2, totalPrice: 2 * 70 + 2 * 450 },
+        }),
+      );
+    });
+
     it('a delivered order cannot be changed', async () => {
       prisma.order.findUniqueOrThrow.mockResolvedValue({
         id: 'o1',
@@ -549,6 +641,110 @@ describe('OrdersService', () => {
 
       await expect(service.editQuantity('o1', 3)).rejects.toThrow();
       expect(prisma.order.update).not.toHaveBeenCalled();
+    });
+
+    it('emits the order-edited event so the client is notified', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue({
+        id: 'o1',
+        status: 'CREATED',
+        kind: 'REPEAT',
+      });
+      const updated = { id: 'o1', bottles: 3, clientId: 'c1' };
+      prisma.order.update.mockResolvedValue(updated);
+
+      await service.editQuantity('o1', 3);
+
+      expect(events.emit).toHaveBeenCalledWith('order.edited', {
+        order: updated,
+      });
+    });
+  });
+
+  describe('editOrderAddress / editOrderComment (dispatcher content edit)', () => {
+    it('writes the new address text, returns the view and notifies the client', async () => {
+      prisma.order.findUniqueOrThrow
+        .mockResolvedValueOnce({ id: 'o1', addressId: 'a1', status: 'CREATED' })
+        .mockResolvedValueOnce({
+          id: 'o1',
+          clientId: 'c1',
+          address: { id: 'a1' },
+        });
+
+      await service.editOrderAddress('o1', 'вул. Нова 5');
+
+      expect(prisma.address.update).toHaveBeenCalledWith({
+        where: { id: 'a1' },
+        data: { raw: 'вул. Нова 5' },
+      });
+      expect(events.emit).toHaveBeenCalledWith('order.edited', {
+        order: { id: 'o1', clientId: 'c1', address: { id: 'a1' } },
+      });
+    });
+
+    it('writes the new comment on an accepted order', async () => {
+      prisma.order.findUniqueOrThrow
+        .mockResolvedValueOnce({
+          id: 'o1',
+          addressId: 'a1',
+          status: 'ACCEPTED',
+        })
+        .mockResolvedValueOnce({
+          id: 'o1',
+          clientId: 'c1',
+          address: { id: 'a1' },
+        });
+
+      await service.editOrderComment('o1', 'код 42');
+
+      expect(prisma.address.update).toHaveBeenCalledWith({
+        where: { id: 'a1' },
+        data: { comment: 'код 42' },
+      });
+    });
+
+    it('a delivered/cancelled order cannot be edited (no write, no event)', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue({
+        id: 'o1',
+        addressId: 'a1',
+        status: 'DELIVERED',
+      });
+
+      await expect(service.editOrderAddress('o1', 'x')).rejects.toThrow();
+      expect(prisma.address.update).not.toHaveBeenCalled();
+      expect(events.emit).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('setDeliveryNote (dispatcher delivery-timing message to client)', () => {
+    it('stores the note on an active order and emits the delivery-note event', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue({
+        id: 'o1',
+        status: 'ACCEPTED',
+      });
+      const updated = { id: 'o1', clientId: 'c1', deliveryNote: 'сьогодні' };
+      prisma.order.update.mockResolvedValue(updated);
+
+      await service.setDeliveryNote('o1', 'сьогодні');
+
+      expect(prisma.order.update).toHaveBeenCalledWith({
+        where: { id: 'o1' },
+        data: { deliveryNote: 'сьогодні' },
+        include: { client: true, address: true },
+      });
+      expect(events.emit).toHaveBeenCalledWith('order.delivery-note', {
+        order: updated,
+      });
+    });
+
+    it('rejects a delivered/cancelled order (nothing to reschedule)', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue({
+        id: 'o1',
+        status: 'DELIVERED',
+      });
+
+      await expect(service.setDeliveryNote('o1', 'завтра')).rejects.toThrow();
+      expect(prisma.order.update).not.toHaveBeenCalled();
+      expect(events.emit).not.toHaveBeenCalled();
     });
   });
 
@@ -626,6 +822,331 @@ describe('OrdersService', () => {
 
       await expect(service.editClaimedOnHand('o1', 3)).rejects.toThrow();
       expect(prisma.order.update).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('quote (confirmation price preview, no order created)', () => {
+    it('REPEAT with enough tara: water by grid, perBottle set, no order/notification', async () => {
+      // shared client bottlesOnHand=5, past orders exist → REPEAT.
+      prisma.order.count.mockResolvedValue(2);
+
+      const q = await service.quote('c1', 2);
+
+      expect(q).toEqual({
+        kind: 'REPEAT',
+        bottles: 2,
+        totalPrice: 140,
+        perBottle: 70,
+        newTara: 0,
+        depositPerBottle: 450,
+        pumpPrice: 250,
+        electroPumpPrice: 270,
+        waterStartPrice: 50,
+        electro: false,
+        pumpAddon: false,
+      });
+      expect(prisma.order.create).not.toHaveBeenCalled();
+      expect(dispatcher.notifyNewOrder).not.toHaveBeenCalled();
+    });
+
+    it('STARTER_KIT: perBottle is null (kit price is not per-bottle)', async () => {
+      clients.getById.mockResolvedValue({ ...client, bottlesOnHand: 0 });
+      prisma.order.count.mockResolvedValue(0);
+
+      const q = await service.quote('c1', 1);
+
+      expect(q.kind).toBe('STARTER_KIT');
+      expect(q.perBottle).toBeNull();
+      expect(q.totalPrice).toBe(750);
+      expect(q.newTara).toBe(1);
+    });
+
+    it('OWN_TARA claim with a tara top-up: deposit only on the bottles above the claim', async () => {
+      clients.getById.mockResolvedValue({ ...client, bottlesOnHand: 0 });
+      prisma.order.count.mockResolvedValue(0); // first order
+
+      const q = await service.quote('c1', 4, { claimedOnHand: 3 });
+
+      expect(q.kind).toBe('OWN_TARA');
+      expect(q.newTara).toBe(1); // order 4, claimed 3 → 1 new under deposit
+      expect(q.totalPrice).toBe(730); // 4×70 + 1×450
+      expect(q.perBottle).toBe(70);
+    });
+
+    it('falls back to STARTER_KIT when the client is unknown (defensive)', async () => {
+      clients.getById.mockResolvedValue(null);
+      const q = await service.quote('missing', 2);
+      expect(q.kind).toBe('STARTER_KIT');
+    });
+  });
+
+  describe('quote / createOrder price consistency (the preview must equal what is charged)', () => {
+    const scenarios: {
+      name: string;
+      bottlesOnHand: number;
+      count: number;
+      bottles: number;
+      opts?: { electro?: boolean; pumpAddon?: boolean; claimedOnHand?: number };
+    }[] = [
+      { name: 'REPEAT enough tara', bottlesOnHand: 5, count: 3, bottles: 2 },
+      { name: 'REPEAT top-up', bottlesOnHand: 1, count: 3, bottles: 3 },
+      {
+        name: 'STARTER_KIT std',
+        bottlesOnHand: 0,
+        count: 0,
+        bottles: 2,
+      },
+      {
+        name: 'STARTER_KIT electro',
+        bottlesOnHand: 0,
+        count: 0,
+        bottles: 1,
+        opts: { electro: true },
+      },
+      {
+        name: 'OWN_TARA claim + top-up',
+        bottlesOnHand: 0,
+        count: 0,
+        bottles: 4,
+        opts: { claimedOnHand: 3 },
+      },
+      {
+        name: 'OWN_TARA claim + pump add-on',
+        bottlesOnHand: 0,
+        count: 0,
+        bottles: 2,
+        opts: { claimedOnHand: 2, pumpAddon: true },
+      },
+      {
+        // Previously divergent edge: a 0 claim with a committed balance. Both methods
+        // must normalize it to "no claim" and quote off the real balance (5).
+        name: 'claim 0 with a committed balance (normalized alike)',
+        bottlesOnHand: 5,
+        count: 0,
+        bottles: 2,
+        opts: { claimedOnHand: 0 },
+      },
+    ];
+
+    it.each(scenarios)(
+      '$name: quote.totalPrice === createOrder totalPrice',
+      async ({ bottlesOnHand, count, bottles, opts }) => {
+        clients.getById.mockResolvedValue({ ...client, bottlesOnHand });
+        prisma.order.count.mockResolvedValue(count);
+        let createdTotal: number | undefined;
+        prisma.order.create.mockImplementation(
+          (args: { data: { totalPrice: number } }) => {
+            createdTotal = args.data.totalPrice;
+            return Promise.resolve({ id: 'o1', ...args.data });
+          },
+        );
+
+        const q = await service.quote('c1', bottles, opts);
+        await service.createOrder('c1', bottles, opts);
+
+        expect(q.totalPrice).toBe(createdTotal);
+      },
+    );
+  });
+
+  describe('stats (/stats summary)', () => {
+    it('sums today and the week without cancelled orders', async () => {
+      prisma.order.count.mockResolvedValue(0); // building the tx array
+      prisma.order.aggregate.mockResolvedValue({ _sum: { totalPrice: 0 } });
+      prisma.$transaction.mockResolvedValue([
+        2,
+        { _sum: { totalPrice: 500 } },
+        7,
+        { _sum: { totalPrice: 1800 } },
+      ]);
+
+      await expect(service.stats()).resolves.toEqual({
+        today: { count: 2, sum: 500 },
+        week: { count: 7, sum: 1800 },
+      });
+    });
+
+    it('a null aggregate sum (no orders in the window) becomes 0, not null', async () => {
+      prisma.$transaction.mockResolvedValue([
+        0,
+        { _sum: { totalPrice: null } },
+        0,
+        { _sum: { totalPrice: null } },
+      ]);
+
+      await expect(service.stats()).resolves.toEqual({
+        today: { count: 0, sum: 0 },
+        week: { count: 0, sum: 0 },
+      });
+    });
+  });
+
+  describe('cancelOrder (dispatcher cancellation)', () => {
+    it('CREATED → CANCELLED and emits the status event (client is notified)', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue({
+        id: 'o1',
+        status: 'CREATED',
+      });
+      const cancelled = { id: 'o1', clientId: 'c1', status: 'CANCELLED' };
+      prisma.order.update.mockResolvedValue(cancelled);
+
+      await service.cancelOrder('o1');
+
+      expect(prisma.order.update).toHaveBeenCalledWith({
+        where: { id: 'o1' },
+        data: { status: 'CANCELLED' },
+      });
+      expect(events.emit).toHaveBeenCalledWith('order.status.changed', {
+        order: cancelled,
+      });
+    });
+
+    it('ACCEPTED → CANCELLED is allowed (a dispatcher can still cancel an accepted order)', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue({
+        id: 'o1',
+        status: 'ACCEPTED',
+      });
+      prisma.order.update.mockResolvedValue({ id: 'o1', status: 'CANCELLED' });
+
+      await expect(service.cancelOrder('o1')).resolves.toMatchObject({
+        status: 'CANCELLED',
+      });
+      expect(prisma.order.update).toHaveBeenCalled();
+    });
+
+    it('an already CANCELLED order cannot be cancelled again', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue({
+        id: 'o1',
+        status: 'CANCELLED',
+      });
+
+      await expect(service.cancelOrder('o1')).rejects.toThrow();
+      expect(prisma.order.update).not.toHaveBeenCalled();
+      expect(events.emit).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('markDelivered — tara credit by kind (creditTara)', () => {
+    it('REPEAT credits only the tara top-up (bottles above the remainder), no pump', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue({
+        id: 'o1',
+        status: 'ACCEPTED',
+      });
+      prisma.order.update.mockResolvedValue({
+        id: 'o1',
+        clientId: 'c1',
+        kind: 'REPEAT',
+        bottles: 3,
+        newTara: 1,
+        pumpAddon: false,
+        status: 'DELIVERED',
+      });
+
+      await service.markDelivered('o1');
+
+      expect(prisma.client.update).toHaveBeenCalledWith({
+        where: { id: 'c1' },
+        data: { bottlesOnHand: { increment: 1 } },
+      });
+    });
+
+    it('OWN_TARA with no top-up and no pump credits nothing (client is not touched)', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue({
+        id: 'o1',
+        status: 'ACCEPTED',
+      });
+      prisma.order.update.mockResolvedValue({
+        id: 'o1',
+        clientId: 'c1',
+        kind: 'OWN_TARA',
+        bottles: 2,
+        newTara: 0,
+        pumpAddon: false,
+        status: 'DELIVERED',
+      });
+
+      await service.markDelivered('o1');
+
+      // Nothing to credit → no client write at all.
+      expect(prisma.client.update).not.toHaveBeenCalled();
+    });
+
+    it('a tara-credit failure does not break an already completed delivery (best-effort)', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue({
+        id: 'o1',
+        status: 'ACCEPTED',
+      });
+      prisma.order.update.mockResolvedValue({
+        id: 'o1',
+        clientId: 'c1',
+        kind: 'STARTER_KIT',
+        bottles: 2,
+        newTara: 2,
+        status: 'DELIVERED',
+      });
+      prisma.client.update.mockRejectedValue(new Error('db down'));
+
+      await expect(service.markDelivered('o1')).resolves.toMatchObject({
+        status: 'DELIVERED',
+      });
+      // the status event still fires despite the accounting failure.
+      expect(events.emit).toHaveBeenCalledWith('order.status.changed', {
+        order: expect.objectContaining({ status: 'DELIVERED' }) as object,
+      });
+    });
+  });
+
+  describe('read helpers (dispatcher/client screens)', () => {
+    it('listByClient: newest first, default limit 5, cancelled included', async () => {
+      prisma.order.findMany.mockResolvedValue([{ id: 'o1' }]);
+
+      await service.listByClient('c1');
+
+      expect(prisma.order.findMany).toHaveBeenCalledWith({
+        where: { clientId: 'c1' },
+        orderBy: { createdAt: 'desc' },
+        take: 5,
+      });
+    });
+
+    it('listActive: only CREATED/ACCEPTED, oldest first (FIFO), with relations', async () => {
+      prisma.order.findMany.mockResolvedValue([]);
+
+      await service.listActive();
+
+      expect(prisma.order.findMany).toHaveBeenCalledWith({
+        where: { status: { in: ['CREATED', 'ACCEPTED'] } },
+        orderBy: { createdAt: 'asc' },
+        take: 20,
+        include: { client: true, address: true },
+      });
+    });
+
+    it('getOrderView: fetches the order with client + address', async () => {
+      prisma.order.findUnique.mockResolvedValue({ id: 'o1' });
+
+      await service.getOrderView('o1');
+
+      expect(prisma.order.findUnique).toHaveBeenCalledWith({
+        where: { id: 'o1' },
+        include: { client: true, address: true },
+      });
+    });
+
+    it('waterUnitPrice: live grid price per bottle for the quantity (6 → from-6 tier)', async () => {
+      await expect(service.waterUnitPrice(6)).resolves.toBe(65);
+      await expect(service.waterUnitPrice(1)).resolves.toBe(80);
+    });
+  });
+
+  describe('setOrderAddressGeo edge', () => {
+    it('rejects when the order does not exist (findUniqueOrThrow throws)', async () => {
+      prisma.order.findUniqueOrThrow.mockRejectedValue(new Error('not found'));
+
+      await expect(
+        service.setOrderAddressGeo('missing', 49, 26),
+      ).rejects.toThrow();
+      expect(prisma.address.update).not.toHaveBeenCalled();
     });
   });
 });

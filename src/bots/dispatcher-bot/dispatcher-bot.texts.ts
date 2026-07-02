@@ -66,9 +66,38 @@ export function statsMessage(stats: {
 /** No active orders (/orders). */
 export const noActiveOrders = 'Активних замовлень немає 👍';
 
+/** Header of the edit sub-menu (✏️ Змінити): pick which field to change. */
+export function editMenuPrompt(orderId: string): string {
+  return `✏️ Замовлення #${orderId.slice(0, 8)}: що змінити?`;
+}
+
+/**
+ * Sub-menu opened by "✏️ Змінити": pick the field to edit. Geo point and the
+ * OWN_TARA claim keep their own buttons on the card — not repeated here.
+ */
+export function editMenuKeyboard(orderId: string): InlineKeyboard {
+  return new InlineKeyboard()
+    .text('📦 Кількість', `ef:qty:${orderId}`)
+    .row()
+    .text('📍 Адресу', `ef:addr:${orderId}`)
+    .text('📝 Коментар', `ef:comment:${orderId}`)
+    .row()
+    .text('❌ Скасувати', 'ef_cancel');
+}
+
 /** Prompt for the new bottle quantity when editing an order (✏️ Змінити). */
 export function editQuantityPrompt(orderId: string): string {
   return `✏️ Замовлення #${orderId.slice(0, 8)}: введіть нову кількість бутлів.`;
+}
+
+/** Prompt for the new delivery address text when editing an order (✏️ → 📍 Адресу). */
+export function editAddressPrompt(orderId: string): string {
+  return `📍 Замовлення #${orderId.slice(0, 8)}: введіть нову адресу доставки.`;
+}
+
+/** Prompt for the new address comment when editing an order (✏️ → 📝 Коментар). */
+export function editCommentPrompt(orderId: string): string {
+  return `📝 Замовлення #${orderId.slice(0, 8)}: введіть новий коментар до адреси.`;
 }
 
 /** Prompt for delivery coordinates when geo-tagging an order's address (📍). */
@@ -77,6 +106,57 @@ export function geoTagPrompt(orderId: string): string {
     `📍 Замовлення #${orderId.slice(0, 8)}: надішліть локацію (📎 → Геопозиція) ` +
     'або вставте координати «49.42, 26.99» чи посилання на карту.'
   );
+}
+
+/**
+ * Delivery-timing presets the dispatcher can send the client (🕒). Short keys keep
+ * the callback data small (order ids are uuids). The phrase is what the client sees;
+ * "✏️ Свій варіант" (custom text) is offered alongside these for anything else.
+ */
+const DELIVERY_ETA_PRESETS: Record<string, string> = {
+  td: 'сьогодні',
+  tm: 'завтра',
+  h1: 'протягом години',
+  h2: 'протягом 2 годин',
+};
+
+/** Maps a preset key to its phrase, or undefined for an unknown key (untrusted callback). */
+export function deliveryEtaPreset(key: string): string | undefined {
+  return DELIVERY_ETA_PRESETS[key];
+}
+
+/** Prompt shown when the dispatcher opens the delivery-timing picker (🕒). */
+export function deliveryEtaPrompt(orderId: string): string {
+  return `🕒 Замовлення #${orderId.slice(0, 8)}: що повідомити клієнту про час доставки?`;
+}
+
+/** Nudge to set the delivery time right after accepting an order. */
+export function deliveryEtaAcceptNudge(orderId: string): string {
+  return `✅ Прийнято #${orderId.slice(0, 8)}. Повідомити клієнту орієнтовний час?`;
+}
+
+/** Prompt for a custom delivery-timing message (✏️ Свій варіант). */
+export function deliveryEtaCustomPrompt(orderId: string): string {
+  return `🕒 Замовлення #${orderId.slice(0, 8)}: введіть текст про час доставки для клієнта.`;
+}
+
+/** Confirmation shown after a delivery-timing message was sent to the client. */
+export function deliveryEtaSent(orderId: string, note: string): string {
+  return `🕒 Клієнту надіслано (#${orderId.slice(0, 8)}): «${note}»`;
+}
+
+/** Buttons to pick / type the delivery-timing message for the client (🕒). */
+export function deliveryEtaKeyboard(orderId: string): InlineKeyboard {
+  return new InlineKeyboard()
+    .text('Сьогодні', `etap:td:${orderId}`)
+    .text('Завтра', `etap:tm:${orderId}`)
+    .row()
+    .text('Протягом години', `etap:h1:${orderId}`)
+    .text('Протягом 2 годин', `etap:h2:${orderId}`)
+    .row()
+    .text('✏️ Свій варіант', `etac:${orderId}`)
+    .row()
+    .text('❌ Скасувати', `etax:${orderId}`);
 }
 
 /** Prompt for the corrected declared bottle balance of an OWN_TARA order (step B). */
@@ -160,13 +240,20 @@ export function orderMessage(
     address.lat != null && address.lng != null
       ? `\n🗺 ${mapsLink(address.lat, address.lng)}`
       : '';
+  // Client note about THIS order (availability window etc.) — input for the driver.
+  const note = order.note ? `\n📝 ${order.note}` : '';
+  // Echo of the last delivery-timing message sent to the client (🗓, so it does not
+  // clash with the created-at 🕒) — reminds the dispatcher what was promised.
+  const delivery = order.deliveryNote
+    ? `\n🗓 Клієнту: ${order.deliveryNote}`
+    : '';
   return (
     `${header} #${order.id.slice(0, 8)}${mark}\n` +
     `🕒 ${formatDateTime(order.createdAt)}\n` +
     `${composition(order)}\n` +
-    `📍 ${address.raw}${comment}${geo}\n` +
+    `📍 ${address.raw}${comment}${geo}${note}\n` +
     `👤 ${name} (${client.phone})\n` +
-    `💰 ${order.totalPrice} грн готівкою водієві`
+    `💰 ${order.totalPrice} грн готівкою водієві${delivery}`
   );
 }
 
@@ -191,6 +278,7 @@ export function orderKeyboard(
       if (kind === OrderKind.OWN_TARA) {
         kb.row().text('🔢 Звірити баки', `claim:${orderId}`);
       }
+      kb.row().text('🕒 Час доставки', `eta:${orderId}`);
       kb.row()
         .text('📍 Прив’язати точку', `geo:${orderId}`)
         .text('📋 Рядок водію', `drvline:${orderId}`);
@@ -202,6 +290,8 @@ export function orderKeyboard(
         .text('❌ Скасувати', `can:${orderId}`)
         .row()
         .text('✏️ Змінити', `edit:${orderId}`)
+        .row()
+        .text('🕒 Час доставки', `eta:${orderId}`)
         .row()
         .text('📍 Прив’язати точку', `geo:${orderId}`)
         .text('📋 Рядок водію', `drvline:${orderId}`);
@@ -247,9 +337,10 @@ export function driverLine(
 ): string {
   const comment = address.comment ? ` (${address.comment})` : '';
   const name = client.name ?? 'без імені';
+  const note = order.note ? `\n📝 ${order.note}` : '';
   let out =
     `${driverPriceSpec(order, unit)}\n` +
-    `📍 ${address.raw}${comment}\n` +
+    `📍 ${address.raw}${comment}${note}\n` +
     `👤 ${name}`;
   if (address.lat != null && address.lng != null) {
     out += `\n🗺 ${mapsLink(address.lat, address.lng)}`;
