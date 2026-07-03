@@ -1026,6 +1026,47 @@ describe('OrdersService', () => {
     });
   });
 
+  describe('revertCancellation (undo a dispatcher cancel)', () => {
+    it('CANCELLED → CREATED via an atomic guarded update, no client event', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue({
+        id: 'o1',
+        status: 'CANCELLED',
+      });
+      const reverted = { id: 'o1', clientId: 'c1', status: 'CREATED' };
+      prisma.order.update.mockResolvedValue(reverted);
+
+      await expect(service.revertCancellation('o1')).resolves.toBe(reverted);
+
+      expect(prisma.order.update).toHaveBeenCalledWith({
+        // where includes status — an atomic guard against a double undo / race.
+        where: { id: 'o1', status: 'CANCELLED' },
+        data: { status: 'CREATED' },
+      });
+      // a cancel-then-undo is a dispatcher correction — the client is not pushed.
+      expect(events.emit).not.toHaveBeenCalled();
+    });
+
+    it('rejects reverting an order that is not CANCELLED (guard)', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue({
+        id: 'o1',
+        status: 'CREATED',
+      });
+
+      await expect(service.revertCancellation('o1')).rejects.toThrow();
+      expect(prisma.order.update).not.toHaveBeenCalled();
+    });
+
+    it('rejects reverting a DELIVERED order (guard)', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue({
+        id: 'o1',
+        status: 'DELIVERED',
+      });
+
+      await expect(service.revertCancellation('o1')).rejects.toThrow();
+      expect(prisma.order.update).not.toHaveBeenCalled();
+    });
+  });
+
   describe('markDelivered — tara credit by kind (creditTara)', () => {
     it('REPEAT credits only the tara top-up (bottles above the remainder), no pump', async () => {
       prisma.order.findUniqueOrThrow.mockResolvedValue({

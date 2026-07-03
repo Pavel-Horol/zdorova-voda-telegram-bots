@@ -11,6 +11,7 @@ import {
   parsePriceValue,
   phoneSearchToken,
   routeDispatcherText,
+  terminalActionOf,
 } from './dispatcher-bot.fsm';
 
 /**
@@ -149,6 +150,19 @@ describe('routeDispatcherText', () => {
 
   it('neither a button nor an active mode → ignore', () => {
     expect(routeDispatcherText('привіт', noMode)).toEqual({ kind: 'ignore' });
+  });
+});
+
+describe('terminalActionOf', () => {
+  it('maps the guarded card-button prefixes to their terminal action', () => {
+    expect(terminalActionOf('can')).toBe('cancel');
+    expect(terminalActionOf('del')).toBe('deliver');
+  });
+
+  it('an unknown prefix → null (untrusted callback data)', () => {
+    expect(terminalActionOf('acc')).toBeNull();
+    expect(terminalActionOf('')).toBeNull();
+    expect(terminalActionOf('canc')).toBeNull();
   });
 });
 

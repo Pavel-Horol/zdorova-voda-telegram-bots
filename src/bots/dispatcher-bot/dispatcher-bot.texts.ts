@@ -410,6 +410,51 @@ export function orderKeyboard(
   }
 }
 
+/**
+ * Are-you-sure prompt before cancelling an order (mis-tap protection). Terminal and
+ * hard to undo, so tapping "❌ Скасувати" asks first (UX A5: context in the button).
+ */
+export function confirmCancelPrompt(orderId: string): string {
+  return `❌ Скасувати замовлення #${orderId.slice(0, 8)}?`;
+}
+
+/** Confirm/deny buttons for a cancel (UX A5: the action is spelled out in the button). */
+export function confirmCancelKeyboard(orderId: string): InlineKeyboard {
+  return new InlineKeyboard()
+    .text('Так, скасувати', `canc:${orderId}`)
+    .text('Ні, залишити', `cann:${orderId}`);
+}
+
+/**
+ * Are-you-sure prompt before marking an order delivered (mis-tap protection). Delivery
+ * credits the client's tara balance and is hard to undo, so it asks first.
+ */
+export function confirmDeliverPrompt(orderId: string): string {
+  return `🚚 Підтвердити доставку замовлення #${orderId.slice(0, 8)}?`;
+}
+
+/** Confirm/deny buttons for a delivery (UX A5: the action is spelled out in the button). */
+export function confirmDeliverKeyboard(orderId: string): InlineKeyboard {
+  return new InlineKeyboard()
+    .text('Так, доставлено', `delc:${orderId}`)
+    .text('Ні, залишити', `deln:${orderId}`);
+}
+
+/**
+ * Undo affordance shown right after a successful cancel — a single "↩️ Повернути"
+ * button that reverts the order to active (CANCELLED → CREATED). Sent as a separate
+ * message so the redrawn (button-less) terminal card is not disturbed. No undo is
+ * offered for delivery (tara already credited) — that is protected by the confirm only.
+ */
+export function undoCancelText(orderId: string): string {
+  return `Замовлення #${orderId.slice(0, 8)} скасовано. Помилково?`;
+}
+
+/** The "↩️ Повернути" button to undo a just-made cancel. */
+export function undoCancelKeyboard(orderId: string): InlineKeyboard {
+  return new InlineKeyboard().text('↩️ Повернути', `unc:${orderId}`);
+}
+
 /** Google Maps link for a tagged delivery point (shared by the card and driver line). */
 function mapsLink(lat: number, lng: number): string {
   return `https://maps.google.com/?q=${lat},${lng}`;

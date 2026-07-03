@@ -111,6 +111,25 @@ export function routeDispatcherText(
   return { kind: 'ignore' };
 }
 
+/**
+ * Which terminal action the dispatcher is being asked to confirm before it runs
+ * (mis-tap protection): cancelling an order or marking it delivered. Both are hard to
+ * undo (cancel loses the queue slot, deliver credits the client's tara balance), so
+ * tapping the card button shows an are-you-sure step first (PRODUCT.md).
+ */
+export type TerminalAction = 'cancel' | 'deliver';
+
+/**
+ * Maps the confirm-request callback prefix (`can` cancel, `del` deliver) to the
+ * terminal action it guards, or null for an unknown prefix (untrusted callback data,
+ * CLAUDE.md rule 7). Pure — the handler resolves the order id and renders the confirm.
+ */
+export function terminalActionOf(prefix: string): TerminalAction | null {
+  if (prefix === 'can') return 'cancel';
+  if (prefix === 'del') return 'deliver';
+  return null;
+}
+
 /** Result of parsing a number from text: a valid value or a rejection. */
 export type ParseResult = { ok: true; value: number } | { ok: false };
 
