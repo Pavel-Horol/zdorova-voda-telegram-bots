@@ -10,6 +10,9 @@ import {
   activeOrdersCappedNote,
   activeOrdersHeader,
   activeOrdersSummary,
+  cancelReasonCustomPrompt,
+  cancelReasonPreset,
+  confirmCancelKeyboard,
   contactsKeyboard,
   contactsListMessage,
   callbackRequestMessage,
@@ -345,6 +348,54 @@ describe('orderMessage', () => {
     );
     expect(msg).not.toContain('📝');
     expect(msg).not.toContain('🗓');
+  });
+
+  it('shows the cancellation reason on a cancelled card', () => {
+    const msg = orderMessage(
+      makeCardOrder({
+        status: OrderStatus.CANCELLED,
+        cancelReason: 'поза зоною',
+      }),
+      makeCardClient(),
+      makeAddress({ comment: null }),
+    );
+    expect(msg).toContain('❌ Причина: поза зоною');
+  });
+
+  it('omits the reason line for a non-cancelled order (even if a stale reason lingers)', () => {
+    const msg = orderMessage(
+      makeCardOrder({
+        status: OrderStatus.CREATED,
+        cancelReason: 'поза зоною',
+      }),
+      makeCardClient(),
+      makeAddress({ comment: null }),
+    );
+    expect(msg).not.toContain('Причина');
+  });
+});
+
+describe('cancellation reason (❌ picker)', () => {
+  it('cancelReasonPreset maps known keys and rejects unknown', () => {
+    expect(cancelReasonPreset('zone')).toBe('поза зоною');
+    expect(cancelReasonPreset('mind')).toBe('клієнт передумав');
+    expect(cancelReasonPreset('dup')).toBe('дубль замовлення');
+    expect(cancelReasonPreset('noans')).toBe('немає зв’язку з клієнтом');
+    expect(cancelReasonPreset('zzz')).toBeUndefined();
+  });
+
+  it('the reason keyboard carries a canr:<key>:<id> per preset, plus custom + dismiss', () => {
+    const cbs = JSON.stringify(confirmCancelKeyboard('o1').inline_keyboard);
+    expect(cbs).toContain('canr:zone:o1');
+    expect(cbs).toContain('canr:mind:o1');
+    expect(cbs).toContain('canr:dup:o1');
+    expect(cbs).toContain('canr:noans:o1');
+    expect(cbs).toContain('canx:o1'); // ✏️ Інша причина
+    expect(cbs).toContain('cann:o1'); // Ні, залишити
+  });
+
+  it('cancelReasonCustomPrompt names the order', () => {
+    expect(cancelReasonCustomPrompt('abcd1234ef')).toContain('#abcd1234');
   });
 });
 

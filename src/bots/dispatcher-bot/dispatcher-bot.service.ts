@@ -40,6 +40,8 @@ import {
   dispatchersForbidden,
   dispatchersKeyboard,
   dispatchersListMessage,
+  cancelReasonCustomPrompt,
+  cancelReasonPreset,
   clientCardMessage,
   clientLookupPrompt,
   confirmCancelKeyboard,
@@ -83,7 +85,6 @@ import {
   BTN_PRICES,
   BTN_STATS,
   type OrderEditField,
-  type TerminalAction,
   formatChatTitle,
   normalizeOrderIdArg,
   parseDispatcherInput,
@@ -205,12 +206,13 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
     // are-you-sure confirm; only its "Так" runs the real transition.
     bot.callbackQuery(/^del:(.+)$/, (ctx) => this.onConfirmRequest(ctx, 'del'));
     bot.callbackQuery(/^can:(.+)$/, (ctx) => this.onConfirmRequest(ctx, 'can'));
-    bot.callbackQuery(/^canc:(.+)$/, (ctx) =>
-      this.onConfirmTerminal(ctx, 'cancel'),
+    // Cancel confirm doubles as a reason picker: a preset both confirms and records
+    // why; "✏️ Інша причина" switches to free text; "Ні, залишити" (cann) dismisses.
+    bot.callbackQuery(/^canr:(zone|mind|dup|noans):(.+)$/, (ctx) =>
+      this.onCancelWithReason(ctx),
     );
-    bot.callbackQuery(/^delc:(.+)$/, (ctx) =>
-      this.onConfirmTerminal(ctx, 'deliver'),
-    );
+    bot.callbackQuery(/^canx:(.+)$/, (ctx) => this.onCancelReasonCustom(ctx));
+    bot.callbackQuery(/^delc:(.+)$/, (ctx) => this.onConfirmDeliver(ctx));
     bot.callbackQuery(/^cann:(.+)$/, (ctx) => this.onDismissConfirm(ctx));
     bot.callbackQuery(/^deln:(.+)$/, (ctx) => this.onDismissConfirm(ctx));
     bot.callbackQuery(/^unc:(.+)$/, (ctx) => this.onUndoCancel(ctx));
@@ -317,23 +319,18 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * "Так" on a terminal confirm: run the guarded transition and redraw the card to its
-   * (button-less) terminal state. After a cancel also offer a one-tap undo — a separate
-   * message so the redrawn card is untouched (delivery gets no undo: tara is credited).
-   * An invalid transition (already handled / raced) → a toast, then redraw, no crash.
+   * "Так, доставлено" on the delivery confirm: run the guarded transition and redraw the
+   * card to its (button-less) terminal state. No undo (tara is credited) — that is why
+   * delivery asks first. An invalid transition (already handled / raced) → a toast.
    */
-  private async onConfirmTerminal(
-    ctx: DispatcherContext,
-    action: TerminalAction,
-  ): Promise<void> {
+  private async onConfirmDeliver(ctx: DispatcherContext): Promise<void> {
     const id = ctx.match?.[1];
     if (!id) {
       await ctx.answerCallbackQuery();
       return;
     }
     try {
-      if (action === 'deliver') await this.orders.markDelivered(id);
-      else await this.orders.cancelOrder(id);
+      await this.orders.markDelivered(id);
     } catch {
       await ctx.answerCallbackQuery({ text: 'Вже оброблено або недоступно' });
       await this.refreshOrderMessage(ctx, id);
@@ -341,11 +338,84 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
     }
     await ctx.answerCallbackQuery({ text: 'Готово' });
     await this.refreshOrderMessage(ctx, id);
-    if (action === 'cancel') {
-      await ctx.reply(undoCancelText(id), {
-        reply_markup: undoCancelKeyboard(id),
+  }
+
+  /**
+   * A cancellation reason preset was picked (❌ → «Поза зоною» …): it both confirms the
+   * cancel and records why. Cancels with the reason, redraws the card (now showing the
+   * reason) and offers the one-tap undo. Unknown key / raced transition → a toast, no crash.
+   */
+  private async onCancelWithReason(ctx: DispatcherContext): Promise<void> {
+    const key = ctx.match?.[1];
+    const id = ctx.match?.[2];
+    const reason = key ? cancelReasonPreset(key) : undefined;
+    if (!id || !reason) {
+      await ctx.answerCallbackQuery();
+      return;
+    }
+    try {
+      await this.orders.cancelOrder(id, reason);
+    } catch {
+      await ctx.answerCallbackQuery({ text: 'Вже оброблено або недоступно' });
+      await this.refreshOrderMessage(ctx, id);
+      return;
+    }
+    await ctx.answerCallbackQuery({ text: 'Готово' });
+    await this.refreshOrderMessage(ctx, id);
+    await ctx.reply(undoCancelText(id), {
+      reply_markup: undoCancelKeyboard(id),
+    });
+  }
+
+  /**
+   * "✏️ Інша причина" in the cancel picker: wait for a free-text reason. Replaces the
+   * picker with the prompt (no dangling keyboard); the typed reason is handled as the
+   * `cancel-reason` intent in {@link onText}.
+   */
+  private async onCancelReasonCustom(ctx: DispatcherContext): Promise<void> {
+    await ctx.answerCallbackQuery();
+    const id = ctx.match?.[1];
+    if (!id) return;
+    ctx.session.editingPriceField = undefined; // input modes are mutually exclusive
+    ctx.session.editingOrder = undefined;
+    ctx.session.editingClaimOrderId = undefined;
+    ctx.session.geoTaggingOrderId = undefined;
+    ctx.session.deliveryNoteOrderId = undefined;
+    ctx.session.lookupClient = undefined;
+    ctx.session.lookupOrder = undefined;
+    ctx.session.addingContact = undefined;
+    ctx.session.addingDispatcher = undefined;
+    ctx.session.cancellingOrderId = id;
+    await ctx.editMessageText(cancelReasonCustomPrompt(id));
+  }
+
+  /**
+   * Free-text cancellation reason typed (❌ → ✏️ Інша причина): cancel with it, then send
+   * the cancelled card (a new message — the trigger was text, not an inline card) and the
+   * undo affordance. An inactive order → a graceful message; the mode is cleared either way.
+   */
+  private async applyCancelReason(
+    ctx: DispatcherContext,
+    orderId: string,
+    text: string,
+  ): Promise<void> {
+    try {
+      await this.orders.cancelOrder(orderId, text);
+    } catch {
+      ctx.session.cancellingOrderId = undefined;
+      await ctx.reply('Це замовлення вже не можна скасувати.');
+      return;
+    }
+    ctx.session.cancellingOrderId = undefined;
+    const view = await this.orders.getOrderView(orderId);
+    if (view) {
+      await ctx.reply(orderMessage(view, view.client, view.address), {
+        reply_markup: orderKeyboard(view.id, view.status, view.kind),
       });
     }
+    await ctx.reply(undoCancelText(orderId), {
+      reply_markup: undoCancelKeyboard(orderId),
+    });
   }
 
   /** "Ні" on a terminal confirm: keep the order — restore the normal card in place. */
@@ -445,6 +515,7 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
     ctx.session.deliveryNoteOrderId = undefined;
     ctx.session.lookupClient = undefined;
     ctx.session.lookupOrder = undefined;
+    ctx.session.cancellingOrderId = undefined;
     ctx.session.addingContact = undefined;
     ctx.session.addingDispatcher = undefined;
     const prices = await this.pricingSettings.getCurrent();
@@ -462,6 +533,7 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
     ctx.session.deliveryNoteOrderId = undefined;
     ctx.session.lookupClient = undefined;
     ctx.session.lookupOrder = undefined;
+    ctx.session.cancellingOrderId = undefined;
     ctx.session.addingContact = undefined;
     ctx.session.addingDispatcher = undefined;
     ctx.session.editingPriceField = field;
@@ -505,6 +577,7 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
     ctx.session.deliveryNoteOrderId = undefined;
     ctx.session.lookupClient = undefined;
     ctx.session.lookupOrder = undefined;
+    ctx.session.cancellingOrderId = undefined;
     ctx.session.addingContact = undefined;
     ctx.session.addingDispatcher = undefined;
     ctx.session.editingOrder = { id, field };
@@ -540,6 +613,7 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
     ctx.session.deliveryNoteOrderId = undefined;
     ctx.session.lookupClient = undefined;
     ctx.session.lookupOrder = undefined;
+    ctx.session.cancellingOrderId = undefined;
     ctx.session.addingContact = undefined;
     ctx.session.addingDispatcher = undefined;
     ctx.session.editingClaimOrderId = id;
@@ -561,6 +635,7 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
     ctx.session.deliveryNoteOrderId = undefined;
     ctx.session.lookupClient = undefined;
     ctx.session.lookupOrder = undefined;
+    ctx.session.cancellingOrderId = undefined;
     ctx.session.addingContact = undefined;
     ctx.session.addingDispatcher = undefined;
     ctx.session.geoTaggingOrderId = id;
@@ -615,6 +690,7 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
     ctx.session.geoTaggingOrderId = undefined;
     ctx.session.lookupClient = undefined;
     ctx.session.lookupOrder = undefined;
+    ctx.session.cancellingOrderId = undefined;
     ctx.session.addingContact = undefined;
     ctx.session.addingDispatcher = undefined;
     ctx.session.deliveryNoteOrderId = id;
@@ -645,6 +721,7 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
     if (query) {
       ctx.session.lookupClient = undefined;
       ctx.session.lookupOrder = undefined;
+      ctx.session.cancellingOrderId = undefined;
       await this.applyClientLookup(ctx, query);
       return;
     }
@@ -662,6 +739,7 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
   ): Promise<void> {
     ctx.session.lookupClient = undefined;
     ctx.session.lookupOrder = undefined;
+    ctx.session.cancellingOrderId = undefined;
     const token = phoneSearchToken(rawPhone);
     if (!token) {
       await ctx.reply('Замало цифр. Введіть більше цифр номера.');
@@ -697,12 +775,14 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
     ctx.session.deliveryNoteOrderId = undefined;
     ctx.session.lookupClient = undefined;
     ctx.session.lookupOrder = undefined;
+    ctx.session.cancellingOrderId = undefined;
     ctx.session.addingContact = undefined;
     ctx.session.addingDispatcher = undefined;
     const arg = ctx.match;
     const query = typeof arg === 'string' ? arg.trim() : '';
     if (query) {
       ctx.session.lookupOrder = undefined;
+      ctx.session.cancellingOrderId = undefined;
       await this.applyOrderLookup(ctx, query);
       return;
     }
@@ -720,6 +800,7 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
     rawId: string,
   ): Promise<void> {
     ctx.session.lookupOrder = undefined;
+    ctx.session.cancellingOrderId = undefined;
     const prefix = normalizeOrderIdArg(rawId);
     if (!prefix) {
       await ctx.reply(orderNotFound);
@@ -829,6 +910,10 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
       case 'set-delivery-note':
         // Custom delivery-timing message typed after "🕒 ✏️ Свій варіант".
         await this.applyDeliveryNote(ctx, intent.orderId, text);
+        return;
+      case 'cancel-reason':
+        // Free-text cancellation reason typed after "❌ → ✏️ Інша причина".
+        await this.applyCancelReason(ctx, intent.orderId, text);
         return;
       case 'edit-price': {
         const parsed = parsePriceValue(text);
@@ -1007,6 +1092,7 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
     ctx.session.deliveryNoteOrderId = undefined;
     ctx.session.lookupClient = undefined;
     ctx.session.lookupOrder = undefined;
+    ctx.session.cancellingOrderId = undefined;
     ctx.session.addingContact = undefined;
     ctx.session.addingDispatcher = undefined;
     const contacts = await this.contacts.listAll();
@@ -1025,6 +1111,7 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
     ctx.session.deliveryNoteOrderId = undefined;
     ctx.session.lookupClient = undefined;
     ctx.session.lookupOrder = undefined;
+    ctx.session.cancellingOrderId = undefined;
     ctx.session.addingDispatcher = undefined;
     ctx.session.addingContact = true;
     await ctx.editMessageText(addContactPrompt);
@@ -1122,6 +1209,7 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
     ctx.session.deliveryNoteOrderId = undefined;
     ctx.session.lookupClient = undefined;
     ctx.session.lookupOrder = undefined;
+    ctx.session.cancellingOrderId = undefined;
     ctx.session.addingContact = undefined;
     ctx.session.addingDispatcher = undefined;
     const dispatchers = await this.dispatchers.listAll();
@@ -1141,6 +1229,7 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
     ctx.session.deliveryNoteOrderId = undefined;
     ctx.session.lookupClient = undefined;
     ctx.session.lookupOrder = undefined;
+    ctx.session.cancellingOrderId = undefined;
     ctx.session.addingContact = undefined;
     ctx.session.addingDispatcher = true;
     await ctx.editMessageText(addDispatcherPrompt);

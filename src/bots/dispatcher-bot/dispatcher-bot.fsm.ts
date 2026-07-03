@@ -31,6 +31,7 @@ export type DispatcherTextIntent =
   | { kind: 'edit-claim'; orderId: string }
   | { kind: 'set-geo'; orderId: string }
   | { kind: 'set-delivery-note'; orderId: string }
+  | { kind: 'cancel-reason'; orderId: string }
   | { kind: 'lookup-client' }
   | { kind: 'lookup-order' }
   | { kind: 'add-contact' }
@@ -48,6 +49,8 @@ export interface DispatcherInputState {
   geoTaggingOrderId?: string;
   /** Awaiting a custom delivery-timing message for the client (🕒 ✏️ Свій варіант). */
   deliveryNoteOrderId?: string;
+  /** Awaiting a custom cancellation reason (❌ → ✏️ Інша причина). */
+  cancellingOrderId?: string;
   /** Awaiting a phone number to look a client up (🔎 Клієнт). */
   lookupClient?: boolean;
   /** Awaiting an order id to look an order up (/order). */
@@ -99,6 +102,9 @@ export function routeDispatcherText(
   }
   if (state.deliveryNoteOrderId) {
     return { kind: 'set-delivery-note', orderId: state.deliveryNoteOrderId };
+  }
+  if (state.cancellingOrderId) {
+    return { kind: 'cancel-reason', orderId: state.cancellingOrderId };
   }
   if (state.lookupClient) {
     return { kind: 'lookup-client' };

@@ -31,6 +31,8 @@ export interface DispatcherSession {
   geoTaggingOrderId?: string;
   /** id of the order we are awaiting a custom delivery-timing message for (🕒). */
   deliveryNoteOrderId?: string;
+  /** id of the order we are awaiting a custom cancellation reason for (❌ → ✏️ Інша причина). */
+  cancellingOrderId?: string;
   /** awaiting a phone number to look a client up (🔎 Клієнт). */
   lookupClient?: boolean;
   /** awaiting an order id to look an order up (/order). */

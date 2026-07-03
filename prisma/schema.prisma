@@ -103,6 +103,10 @@ model Order {
   /// Frozen order total in UAH (integer, no kopecks).
   totalPrice   Int
   status       OrderStatus @default(CREATED)
+  /// Why the dispatcher cancelled (optional): a preset phrase or free text. Shown on
+  /// the cancelled card; cleared when the cancel is undone (revertCancellation). Null
+  /// when the order is not cancelled, or was cancelled without a stated reason.
+  cancelReason String?
   createdAt    DateTime    @default(now())
   acceptedAt   DateTime?
   deliveredAt  DateTime?

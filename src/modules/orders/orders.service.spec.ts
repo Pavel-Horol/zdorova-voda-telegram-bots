@@ -1041,10 +1041,26 @@ describe('OrdersService', () => {
 
       expect(prisma.order.update).toHaveBeenCalledWith({
         where: { id: 'o1' },
-        data: { status: 'CANCELLED' },
+        // no reason given → cancelReason cleared to null
+        data: { status: 'CANCELLED', cancelReason: null },
       });
       expect(events.emit).toHaveBeenCalledWith('order.status.changed', {
         order: cancelled,
+      });
+    });
+
+    it('records the cancellation reason when one is given', async () => {
+      prisma.order.findUniqueOrThrow.mockResolvedValue({
+        id: 'o1',
+        status: 'CREATED',
+      });
+      prisma.order.update.mockResolvedValue({ id: 'o1', status: 'CANCELLED' });
+
+      await service.cancelOrder('o1', 'поза зоною');
+
+      expect(prisma.order.update).toHaveBeenCalledWith({
+        where: { id: 'o1' },
+        data: { status: 'CANCELLED', cancelReason: 'поза зоною' },
       });
     });
 
@@ -1087,7 +1103,8 @@ describe('OrdersService', () => {
       expect(prisma.order.update).toHaveBeenCalledWith({
         // where includes status — an atomic guard against a double undo / race.
         where: { id: 'o1', status: 'CANCELLED' },
-        data: { status: 'CREATED' },
+        // undo also clears the reason — the order is active again.
+        data: { status: 'CREATED', cancelReason: null },
       });
       // a cancel-then-undo is a dispatcher correction — the client is not pushed.
       expect(events.emit).not.toHaveBeenCalled();

@@ -110,6 +110,14 @@ describe('routeDispatcherText', () => {
     ).toEqual({ kind: 'set-delivery-note', orderId: 'o11' });
   });
 
+  it('only cancel-reason input is active → cancel-reason', () => {
+    expect(
+      routeDispatcherText('клієнт не відповідає', {
+        cancellingOrderId: 'o12',
+      }),
+    ).toEqual({ kind: 'cancel-reason', orderId: 'o12' });
+  });
+
   it('"Client" button → client lookup menu', () => {
     expect(routeDispatcherText(BTN_CLIENT, noMode)).toEqual({
       kind: 'menu',

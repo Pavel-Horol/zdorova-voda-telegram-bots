@@ -408,13 +408,18 @@ export function orderMessage(
   const delivery = order.deliveryNote
     ? `\n🗓 Клієнту: ${order.deliveryNote}`
     : '';
+  // Cancellation reason (dispatcher-side), shown only on a cancelled card.
+  const cancel =
+    order.status === OrderStatus.CANCELLED && order.cancelReason
+      ? `\n❌ Причина: ${order.cancelReason}`
+      : '';
   return (
     `${header} #${order.id.slice(0, 8)}${mark}\n` +
     `🕒 ${formatDateTime(order.createdAt)}\n` +
     `${composition(order)}\n` +
     `📍 ${address.raw}${comment}${geo}${note}\n` +
     `👤 ${name} (${client.phone})\n` +
-    `💰 ${order.totalPrice} грн готівкою водієві${delivery}`
+    `💰 ${order.totalPrice} грн готівкою водієві${delivery}${cancel}`
   );
 }
 
@@ -462,18 +467,52 @@ export function orderKeyboard(
 }
 
 /**
- * Are-you-sure prompt before cancelling an order (mis-tap protection). Terminal and
- * hard to undo, so tapping "❌ Скасувати" asks first (UX A5: context in the button).
+ * Cancellation reason presets (❌ → pick a reason). Short keys keep the callback data
+ * small (order ids are uuids); the phrase is what gets stored on the order and shown on
+ * the cancelled card. "✏️ Інша причина" (custom text) is offered alongside for anything
+ * else, and picking any of these both confirms the cancel AND records why.
  */
-export function confirmCancelPrompt(orderId: string): string {
-  return `❌ Скасувати замовлення #${orderId.slice(0, 8)}?`;
+const CANCEL_REASON_PRESETS: Record<string, string> = {
+  zone: 'поза зоною',
+  mind: 'клієнт передумав',
+  dup: 'дубль замовлення',
+  noans: 'немає зв’язку з клієнтом',
+};
+
+/** Maps a reason key to its phrase, or undefined for an unknown key (untrusted callback). */
+export function cancelReasonPreset(key: string): string | undefined {
+  return CANCEL_REASON_PRESETS[key];
 }
 
-/** Confirm/deny buttons for a cancel (UX A5: the action is spelled out in the button). */
+/**
+ * Are-you-sure prompt before cancelling an order (mis-tap protection). Terminal and
+ * hard to undo, so tapping "❌ Скасувати" asks for a reason first — the reason picker
+ * doubles as the confirm step (UX A5: the action is spelled out in the buttons).
+ */
+export function confirmCancelPrompt(orderId: string): string {
+  return `❌ Скасувати замовлення #${orderId.slice(0, 8)}? Оберіть причину:`;
+}
+
+/**
+ * Reason picker shown before a cancel: each preset both confirms and records why, plus
+ * a free-text option and "Ні, залишити" to abort (which keeps the order untouched).
+ */
 export function confirmCancelKeyboard(orderId: string): InlineKeyboard {
   return new InlineKeyboard()
-    .text('Так, скасувати', `canc:${orderId}`)
+    .text('Поза зоною', `canr:zone:${orderId}`)
+    .text('Передумав', `canr:mind:${orderId}`)
+    .row()
+    .text('Дубль', `canr:dup:${orderId}`)
+    .text('Немає зв’язку', `canr:noans:${orderId}`)
+    .row()
+    .text('✏️ Інша причина', `canx:${orderId}`)
+    .row()
     .text('Ні, залишити', `cann:${orderId}`);
+}
+
+/** Prompt for a free-text cancellation reason (❌ → ✏️ Інша причина). */
+export function cancelReasonCustomPrompt(orderId: string): string {
+  return `❌ Замовлення #${orderId.slice(0, 8)}: введіть причину скасування.`;
 }
 
 /**

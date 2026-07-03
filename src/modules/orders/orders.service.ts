@@ -679,8 +679,12 @@ export class OrdersService {
     }
   }
 
-  /** CREATED/ACCEPTED → CANCELLED. A delivered or already cancelled one — not allowed. */
-  async cancelOrder(id: string): Promise<Order> {
+  /**
+   * CREATED/ACCEPTED → CANCELLED. A delivered or already cancelled one — not allowed.
+   * `reason` (optional): why the dispatcher cancelled — a preset phrase or free text,
+   * stored on the order for the cancelled card. Omitted → no stated reason (null).
+   */
+  async cancelOrder(id: string, reason?: string): Promise<Order> {
     const order = await this.prisma.order.findUniqueOrThrow({ where: { id } });
     if (
       order.status !== OrderStatus.CREATED &&
@@ -690,7 +694,7 @@ export class OrdersService {
     }
     const cancelled = await this.prisma.order.update({
       where: { id },
-      data: { status: OrderStatus.CANCELLED },
+      data: { status: OrderStatus.CANCELLED, cancelReason: reason ?? null },
     });
     this.emitStatusChanged(cancelled);
     return cancelled;
@@ -711,7 +715,7 @@ export class OrdersService {
     }
     return this.prisma.order.update({
       where: { id, status: OrderStatus.CANCELLED },
-      data: { status: OrderStatus.CREATED },
+      data: { status: OrderStatus.CREATED, cancelReason: null },
     });
   }
 
