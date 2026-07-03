@@ -5,6 +5,7 @@ import {
   BTN_PRICES,
   BTN_STATS,
   formatChatTitle,
+  normalizeOrderIdArg,
   parseDispatcherInput,
   parseEditedQuantity,
   parseGeoInput,
@@ -115,6 +116,18 @@ describe('routeDispatcherText', () => {
     });
   });
 
+  it('only order lookup is active → lookup-order', () => {
+    expect(routeDispatcherText('a1b2c3d4', { lookupOrder: true })).toEqual({
+      kind: 'lookup-order',
+    });
+  });
+
+  it('client lookup has priority over order lookup (exclusive modes)', () => {
+    expect(
+      routeDispatcherText('050', { lookupClient: true, lookupOrder: true }),
+    ).toEqual({ kind: 'lookup-client' });
+  });
+
   it('only price editing is active → edit-price', () => {
     expect(
       routeDispatcherText('30', { editingPriceField: 'pumpPrice' }),
@@ -149,6 +162,38 @@ describe('routeDispatcherText', () => {
 
   it('neither a button nor an active mode → ignore', () => {
     expect(routeDispatcherText('привіт', noMode)).toEqual({ kind: 'ignore' });
+  });
+});
+
+describe('normalizeOrderIdArg', () => {
+  it('accepts a bare 8-char short id (as shown on the card)', () => {
+    expect(normalizeOrderIdArg('a1b2c3d4')).toBe('a1b2c3d4');
+  });
+
+  it('strips a leading # and surrounding whitespace', () => {
+    expect(normalizeOrderIdArg('  #a1b2c3d4 ')).toBe('a1b2c3d4');
+  });
+
+  it('lowercases hex so a pasted upper-case id still matches', () => {
+    expect(normalizeOrderIdArg('#A1B2C3D4')).toBe('a1b2c3d4');
+  });
+
+  it('accepts a full uuid (hex + dashes)', () => {
+    expect(normalizeOrderIdArg('a1b2c3d4-5e6f-7788-99aa-bbccddeeff00')).toBe(
+      'a1b2c3d4-5e6f-7788-99aa-bbccddeeff00',
+    );
+  });
+
+  it('rejects empty / too-short input', () => {
+    expect(normalizeOrderIdArg('')).toBeNull();
+    expect(normalizeOrderIdArg('#')).toBeNull();
+    expect(normalizeOrderIdArg('a1')).toBeNull();
+  });
+
+  it('rejects non-hex garbage (would never match a uuid)', () => {
+    expect(normalizeOrderIdArg('привіт')).toBeNull();
+    expect(normalizeOrderIdArg('order xyz')).toBeNull();
+    expect(normalizeOrderIdArg('g1h2i3j4')).toBeNull();
   });
 });
 

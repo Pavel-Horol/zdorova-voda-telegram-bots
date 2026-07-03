@@ -124,6 +124,23 @@ export class OrdersService {
   }
 
   /**
+   * Read-only lookup by the short id shown on a card (`#a1b2c3d4`) — or a full uuid —
+   * for the dispatcher's /order command: after an order leaves the active list it can
+   * no longer be re-opened by button, only pulled up by id. The 8-char short id is the
+   * uuid's leading hex, so a `startsWith` prefix match finds it; a full uuid matches
+   * exactly. Loads the same relations as {@link getOrderView} so the card renders. The
+   * prefix is validated/normalized by the handler (normalizeOrderIdArg) — this expects a
+   * clean hex prefix. Returns ALL matches (a short prefix could, in theory, collide).
+   */
+  findByShortIdPrefix(prefix: string): Promise<OrderWithRelations[]> {
+    return this.prisma.order.findMany({
+      where: { id: { startsWith: prefix } },
+      orderBy: { createdAt: 'desc' },
+      include: { client: true, address: true },
+    });
+  }
+
+  /**
    * Active orders (created/accepted) for the dispatcher's /orders command: the work
    * queue if the push scrolled up the chat. Oldest first (FIFO). limit — a safeguard
    * against flooding the chat with messages.

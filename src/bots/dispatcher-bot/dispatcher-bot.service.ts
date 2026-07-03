@@ -59,7 +59,9 @@ import {
   noActiveOrders,
   noClientFound,
   orderKeyboard,
+  orderLookupPrompt,
   orderMessage,
+  orderNotFound,
   priceEditCancelKeyboard,
   priceFieldLabel,
   pricesKeyboard,
@@ -74,6 +76,7 @@ import {
   BTN_STATS,
   type OrderEditField,
   formatChatTitle,
+  normalizeOrderIdArg,
   parseDispatcherInput,
   parseEditedQuantity,
   parseGeoInput,
@@ -178,6 +181,7 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
     bot.command('start', (ctx) => this.onStart(ctx));
     bot.command('help', (ctx) => this.onHelp(ctx));
     bot.command('orders', (ctx) => this.onActiveOrders(ctx));
+    bot.command('order', (ctx) => this.onOrderLookupStart(ctx));
     bot.command('prices', (ctx) => this.onPrices(ctx));
     bot.command('stats', (ctx) => this.onStats(ctx));
     bot.command('client', (ctx) => this.onClientLookupStart(ctx));
@@ -305,6 +309,7 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
     ctx.session.geoTaggingOrderId = undefined;
     ctx.session.deliveryNoteOrderId = undefined;
     ctx.session.lookupClient = undefined;
+    ctx.session.lookupOrder = undefined;
     ctx.session.addingContact = undefined;
     ctx.session.addingDispatcher = undefined;
     const prices = await this.pricingSettings.getCurrent();
@@ -321,6 +326,7 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
     ctx.session.geoTaggingOrderId = undefined;
     ctx.session.deliveryNoteOrderId = undefined;
     ctx.session.lookupClient = undefined;
+    ctx.session.lookupOrder = undefined;
     ctx.session.addingContact = undefined;
     ctx.session.addingDispatcher = undefined;
     ctx.session.editingPriceField = field;
@@ -363,6 +369,7 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
     ctx.session.geoTaggingOrderId = undefined;
     ctx.session.deliveryNoteOrderId = undefined;
     ctx.session.lookupClient = undefined;
+    ctx.session.lookupOrder = undefined;
     ctx.session.addingContact = undefined;
     ctx.session.addingDispatcher = undefined;
     ctx.session.editingOrder = { id, field };
@@ -397,6 +404,7 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
     ctx.session.geoTaggingOrderId = undefined;
     ctx.session.deliveryNoteOrderId = undefined;
     ctx.session.lookupClient = undefined;
+    ctx.session.lookupOrder = undefined;
     ctx.session.addingContact = undefined;
     ctx.session.addingDispatcher = undefined;
     ctx.session.editingClaimOrderId = id;
@@ -417,6 +425,7 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
     ctx.session.editingClaimOrderId = undefined;
     ctx.session.deliveryNoteOrderId = undefined;
     ctx.session.lookupClient = undefined;
+    ctx.session.lookupOrder = undefined;
     ctx.session.addingContact = undefined;
     ctx.session.addingDispatcher = undefined;
     ctx.session.geoTaggingOrderId = id;
@@ -470,6 +479,7 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
     ctx.session.editingClaimOrderId = undefined;
     ctx.session.geoTaggingOrderId = undefined;
     ctx.session.lookupClient = undefined;
+    ctx.session.lookupOrder = undefined;
     ctx.session.addingContact = undefined;
     ctx.session.addingDispatcher = undefined;
     ctx.session.deliveryNoteOrderId = id;
@@ -499,6 +509,7 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
     const query = typeof arg === 'string' ? arg.trim() : '';
     if (query) {
       ctx.session.lookupClient = undefined;
+      ctx.session.lookupOrder = undefined;
       await this.applyClientLookup(ctx, query);
       return;
     }
@@ -515,6 +526,7 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
     rawPhone: string,
   ): Promise<void> {
     ctx.session.lookupClient = undefined;
+    ctx.session.lookupOrder = undefined;
     const token = phoneSearchToken(rawPhone);
     if (!token) {
       await ctx.reply('Замало цифр. Введіть більше цифр номера.');
@@ -532,6 +544,60 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
       ]);
       await ctx.reply(clientCardMessage(client, address, recent[0] ?? null), {
         link_preview_options: { is_disabled: true },
+      });
+    }
+  }
+
+  /**
+   * /order: read-only lookup of an order by its short id (`#a1b2c3d4`, with/without `#`)
+   * or a full uuid. After an order leaves the active list it can't be re-opened by button,
+   * only pulled up here. With an inline argument (`/order a1b2c3d4`) searches right away;
+   * otherwise waits for the id as text. Mirrors {@link onClientLookupStart}.
+   */
+  private async onOrderLookupStart(ctx: DispatcherContext): Promise<void> {
+    ctx.session.editingPriceField = undefined; // input modes are mutually exclusive
+    ctx.session.editingOrder = undefined;
+    ctx.session.editingClaimOrderId = undefined;
+    ctx.session.geoTaggingOrderId = undefined;
+    ctx.session.deliveryNoteOrderId = undefined;
+    ctx.session.lookupClient = undefined;
+    ctx.session.lookupOrder = undefined;
+    ctx.session.addingContact = undefined;
+    ctx.session.addingDispatcher = undefined;
+    const arg = ctx.match;
+    const query = typeof arg === 'string' ? arg.trim() : '';
+    if (query) {
+      ctx.session.lookupOrder = undefined;
+      await this.applyOrderLookup(ctx, query);
+      return;
+    }
+    ctx.session.lookupOrder = true;
+    await ctx.reply(orderLookupPrompt);
+  }
+
+  /**
+   * Looks an order up by its (short or full) id and replies with the full card per match.
+   * A still-active order keeps its action buttons (orderKeyboard); a terminal one has none
+   * (orderKeyboard returns undefined). Read-only. Garbage / unknown id → a friendly message.
+   */
+  private async applyOrderLookup(
+    ctx: DispatcherContext,
+    rawId: string,
+  ): Promise<void> {
+    ctx.session.lookupOrder = undefined;
+    const prefix = normalizeOrderIdArg(rawId);
+    if (!prefix) {
+      await ctx.reply(orderNotFound);
+      return;
+    }
+    const orders = await this.orders.findByShortIdPrefix(prefix);
+    if (!orders.length) {
+      await ctx.reply(orderNotFound);
+      return;
+    }
+    for (const order of orders) {
+      await ctx.reply(orderMessage(order, order.client, order.address), {
+        reply_markup: orderKeyboard(order.id, order.status, order.kind),
       });
     }
   }
@@ -592,6 +658,10 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
       case 'lookup-client':
         // Phone typed after "🔎 Клієнт" — search and show client card(s).
         await this.applyClientLookup(ctx, text);
+        return;
+      case 'lookup-order':
+        // Order id typed after /order — search and show the order card(s).
+        await this.applyOrderLookup(ctx, text);
         return;
       case 'add-contact':
         // New support phone typed after "📞 Контакти → ➕".
@@ -801,6 +871,7 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
     ctx.session.geoTaggingOrderId = undefined;
     ctx.session.deliveryNoteOrderId = undefined;
     ctx.session.lookupClient = undefined;
+    ctx.session.lookupOrder = undefined;
     ctx.session.addingContact = undefined;
     ctx.session.addingDispatcher = undefined;
     const contacts = await this.contacts.listAll();
@@ -818,6 +889,7 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
     ctx.session.geoTaggingOrderId = undefined;
     ctx.session.deliveryNoteOrderId = undefined;
     ctx.session.lookupClient = undefined;
+    ctx.session.lookupOrder = undefined;
     ctx.session.addingDispatcher = undefined;
     ctx.session.addingContact = true;
     await ctx.editMessageText(addContactPrompt);
@@ -914,6 +986,7 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
     ctx.session.geoTaggingOrderId = undefined;
     ctx.session.deliveryNoteOrderId = undefined;
     ctx.session.lookupClient = undefined;
+    ctx.session.lookupOrder = undefined;
     ctx.session.addingContact = undefined;
     ctx.session.addingDispatcher = undefined;
     const dispatchers = await this.dispatchers.listAll();
@@ -932,6 +1005,7 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
     ctx.session.geoTaggingOrderId = undefined;
     ctx.session.deliveryNoteOrderId = undefined;
     ctx.session.lookupClient = undefined;
+    ctx.session.lookupOrder = undefined;
     ctx.session.addingContact = undefined;
     ctx.session.addingDispatcher = true;
     await ctx.editMessageText(addDispatcherPrompt);

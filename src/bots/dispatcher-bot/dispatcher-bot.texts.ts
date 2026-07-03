@@ -176,6 +176,7 @@ export const dispatcherHelp =
   '• Основне меню — кнопки внизу екрана: 📋 Активні, 💰 Ціни, 📊 Статистика, 🔎 Клієнт, 📞 Контакти.\n\n' +
   'Ті самі дії доступні й командами:\n' +
   '/orders — активні замовлення (created/accepted) списком\n' +
+  '/order <номер> — знайти замовлення за номером (напр. /order a1b2c3d4)\n' +
   '/prices — переглянути та змінити ціни\n' +
   '/stats — статистика за замовленнями\n' +
   '/client — знайти клієнта за номером телефону\n' +
@@ -466,6 +467,13 @@ export function clientCancelledMessage(order: Order, client: Client): string {
     `Клієнт: ${name} (${client.phone})`
   );
 }
+
+/** Prompt for the order id when looking an order up by id (/order). */
+export const orderLookupPrompt =
+  'Введіть номер замовлення (напр. a1b2c3d4 або #a1b2c3d4) — знайду картку.';
+
+/** No order matched the looked-up id (/order). */
+export const orderNotFound = 'Замовлення за цим номером не знайдено.';
 
 /** Prompt for the phone number when looking a client up (🔎 Клієнт). */
 export const clientLookupPrompt =

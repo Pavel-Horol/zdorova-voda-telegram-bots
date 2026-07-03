@@ -33,6 +33,8 @@ export interface DispatcherSession {
   deliveryNoteOrderId?: string;
   /** awaiting a phone number to look a client up (🔎 Клієнт). */
   lookupClient?: boolean;
+  /** awaiting an order id to look an order up (/order). */
+  lookupOrder?: boolean;
   /** awaiting a new support phone to add to the contact list (📞 Контакти → ➕). */
   addingContact?: boolean;
   /** awaiting a chat id (+ optional label) to add a dispatcher (/dispatchers → ➕). */

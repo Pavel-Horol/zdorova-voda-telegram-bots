@@ -31,6 +31,7 @@ export type DispatcherTextIntent =
   | { kind: 'set-geo'; orderId: string }
   | { kind: 'set-delivery-note'; orderId: string }
   | { kind: 'lookup-client' }
+  | { kind: 'lookup-order' }
   | { kind: 'add-contact' }
   | { kind: 'add-dispatcher' }
   | { kind: 'edit-price'; field: EditablePriceField }
@@ -48,6 +49,8 @@ export interface DispatcherInputState {
   deliveryNoteOrderId?: string;
   /** Awaiting a phone number to look a client up (🔎 Клієнт). */
   lookupClient?: boolean;
+  /** Awaiting an order id to look an order up (/order). */
+  lookupOrder?: boolean;
   /** Awaiting a new support phone to add to the contact list (📞 Контакти → ➕). */
   addingContact?: boolean;
   /** Awaiting a chat id (+ optional label) to add a dispatcher (/dispatchers → ➕). */
@@ -99,6 +102,9 @@ export function routeDispatcherText(
   if (state.lookupClient) {
     return { kind: 'lookup-client' };
   }
+  if (state.lookupOrder) {
+    return { kind: 'lookup-order' };
+  }
   if (state.addingContact) {
     return { kind: 'add-contact' };
   }
@@ -148,6 +154,22 @@ export function phoneSearchToken(raw: string): string | null {
   const digits = raw.replace(/\D/g, '');
   if (digits.length < 5) return null;
   return digits.slice(-9);
+}
+
+/**
+ * Normalizes the id argument of `/order <id>` for a read-only order lookup. The
+ * dispatcher sees the short id `#a1b2c3d4` on a card and may paste it with or without
+ * the leading `#`, or paste a full uuid. Strips a leading `#`, trims, lowercases and
+ * validates that what remains is a plausible hex prefix (the order id is a uuid — hex
+ * digits and dashes only). Rejects empty / too-short (< 4) / non-hex input → null, so
+ * garbage never reaches the DB as a prefix search. Returns the clean prefix otherwise.
+ */
+export function normalizeOrderIdArg(raw: string): string | null {
+  const text = raw.trim().replace(/^#/, '').trim().toLowerCase();
+  if (text.length < 4) return null;
+  // uuid alphabet only (hex + dashes) — a short id is 8 hex chars, a full uuid adds dashes.
+  if (!/^[0-9a-f-]+$/.test(text)) return null;
+  return text;
 }
 
 /** A parsed "add dispatcher" line: the Telegram chat id and an optional label. */
