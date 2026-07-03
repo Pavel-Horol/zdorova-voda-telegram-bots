@@ -48,6 +48,28 @@ export interface OrderQuote {
   pumpAddon: boolean;
 }
 
+/**
+ * Grouped operator summary for the dispatcher's /stats (SPEC §7). Money and volume
+ * follow the "без скасованих" convention — CANCELLED orders count only under
+ * `cancellations`. Rendered by `statsMessage()` (dispatcher-bot.texts.ts).
+ */
+export interface StatsSummary {
+  /** Point-in-time queue: unhandled (CREATED) and in progress (ACCEPTED). */
+  queue: { created: number; accepted: number };
+  /** Today (from local midnight): order count, money and delivered bottles. */
+  today: { count: number; sum: number; bottles: number };
+  /** Rolling 7 days: order count, money and delivered bottles. */
+  week: { count: number; sum: number; bottles: number };
+  /** Rolling 30 days: order count and money. */
+  month: { count: number; sum: number };
+  /**
+   * Cancellations by period, plus the week cancel rate (cancelled / all week
+   * orders). `weekRate` is null when there were no week orders at all — the text
+   * renders «—» (guards divide-by-zero).
+   */
+  cancellations: { today: number; week: number; weekRate: number | null };
+}
+
 /** Order pump options (the client's onboarding choice). */
 export interface PumpOptions {
   electro?: boolean;
@@ -140,37 +162,107 @@ export class OrdersService {
   }
 
   /**
-   * Summary for /stats (SPEC §7): order count and total for today and the last 7
-   * days, without cancelled. "Today" — from local midnight, "week" — a rolling
-   * 7 days. Full analytics — a separate module later.
+   * Compact operator summary for /stats (SPEC §7). Everything follows the
+   * "без скасованих" convention — CANCELLED orders never count toward volume or
+   * money (only the dedicated cancellation figures count them). Periods: "today"
+   * from local midnight, "week" a rolling 7 days, "month" a rolling 30 days.
+   * "bottles" is the number of bottles actually DELIVERED in the period (a real
+   * volume signal, unlike created-but-pending orders). Full analytics — later.
    */
-  async stats(): Promise<{
-    today: { count: number; sum: number };
-    week: { count: number; sum: number };
-  }> {
+  async stats(): Promise<StatsSummary> {
     const startOfToday = new Date();
     startOfToday.setHours(0, 0, 0, 0);
     const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
-    const notCancelled = { status: { not: OrderStatus.CANCELLED } };
-    const todayWhere = { ...notCancelled, createdAt: { gte: startOfToday } };
-    const weekWhere = { ...notCancelled, createdAt: { gte: weekAgo } };
+    const monthAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
 
-    const [todayCount, todayAgg, weekCount, weekAgg] =
-      await this.prisma.$transaction([
-        this.prisma.order.count({ where: todayWhere }),
-        this.prisma.order.aggregate({
-          where: todayWhere,
-          _sum: { totalPrice: true },
-        }),
-        this.prisma.order.count({ where: weekWhere }),
-        this.prisma.order.aggregate({
-          where: weekWhere,
-          _sum: { totalPrice: true },
-        }),
-      ]);
+    const notCancelled = { status: { not: OrderStatus.CANCELLED } };
+    const delivered = { status: OrderStatus.DELIVERED };
+    const cancelled = { status: OrderStatus.CANCELLED };
+    const since = (from: Date) => ({ createdAt: { gte: from } });
+
+    const [
+      queueCreated,
+      queueAccepted,
+      todayCount,
+      todayAgg,
+      todayBottles,
+      weekCount,
+      weekAgg,
+      weekBottles,
+      monthCount,
+      monthAgg,
+      todayCancelled,
+      weekCancelled,
+    ] = await this.prisma.$transaction([
+      // Queue now: unhandled (CREATED) and in progress (ACCEPTED) — a point-in-time
+      // snapshot, so no period filter.
+      this.prisma.order.count({ where: { status: OrderStatus.CREATED } }),
+      this.prisma.order.count({ where: { status: OrderStatus.ACCEPTED } }),
+      // Today / week: order count + money (non-cancelled) and delivered bottles.
+      this.prisma.order.count({
+        where: { ...notCancelled, ...since(startOfToday) },
+      }),
+      this.prisma.order.aggregate({
+        where: { ...notCancelled, ...since(startOfToday) },
+        _sum: { totalPrice: true },
+      }),
+      this.prisma.order.aggregate({
+        where: { ...delivered, ...since(startOfToday) },
+        _sum: { bottles: true },
+      }),
+      this.prisma.order.count({
+        where: { ...notCancelled, ...since(weekAgo) },
+      }),
+      this.prisma.order.aggregate({
+        where: { ...notCancelled, ...since(weekAgo) },
+        _sum: { totalPrice: true },
+      }),
+      this.prisma.order.aggregate({
+        where: { ...delivered, ...since(weekAgo) },
+        _sum: { bottles: true },
+      }),
+      // This month: count + money (non-cancelled).
+      this.prisma.order.count({
+        where: { ...notCancelled, ...since(monthAgo) },
+      }),
+      this.prisma.order.aggregate({
+        where: { ...notCancelled, ...since(monthAgo) },
+        _sum: { totalPrice: true },
+      }),
+      // Cancellations: today + week.
+      this.prisma.order.count({
+        where: { ...cancelled, ...since(startOfToday) },
+      }),
+      this.prisma.order.count({
+        where: { ...cancelled, ...since(weekAgo) },
+      }),
+    ]);
+
+    const weekSum = weekAgg._sum.totalPrice ?? 0;
+    // Week cancel rate over all week orders (cancelled + non-cancelled). null when
+    // there were no orders at all — the text renders it as «—» (no divide-by-zero).
+    const weekTotalOrders = weekCount + weekCancelled;
+    const cancelRate =
+      weekTotalOrders > 0 ? weekCancelled / weekTotalOrders : null;
+
     return {
-      today: { count: todayCount, sum: todayAgg._sum.totalPrice ?? 0 },
-      week: { count: weekCount, sum: weekAgg._sum.totalPrice ?? 0 },
+      queue: { created: queueCreated, accepted: queueAccepted },
+      today: {
+        count: todayCount,
+        sum: todayAgg._sum.totalPrice ?? 0,
+        bottles: todayBottles._sum.bottles ?? 0,
+      },
+      week: {
+        count: weekCount,
+        sum: weekSum,
+        bottles: weekBottles._sum.bottles ?? 0,
+      },
+      month: { count: monthCount, sum: monthAgg._sum.totalPrice ?? 0 },
+      cancellations: {
+        today: todayCancelled,
+        week: weekCancelled,
+        weekRate: cancelRate,
+      },
     };
   }
 

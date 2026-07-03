@@ -435,17 +435,37 @@ describe('clientCardMessage', () => {
 });
 
 describe('summary / prompt texts', () => {
-  it('statsMessage lists today and week counts and sums', () => {
-    expect(
-      statsMessage({
-        today: { count: 2, sum: 500 },
-        week: { count: 7, sum: 1800 },
-      }),
-    ).toBe(
-      '📊 Статистика (без скасованих):\n' +
-        'Сьогодні: 2 замовлень, сума 500 грн\n' +
-        'За тиждень: 7 замовлень, сума 1800 грн',
+  it('statsMessage renders the full operator summary (queue, periods, bottles, avg check, cancels)', () => {
+    const msg = statsMessage({
+      queue: { created: 3, accepted: 2 },
+      today: { count: 2, sum: 500, bottles: 6 },
+      week: { count: 7, sum: 1800, bottles: 20 },
+      month: { count: 18, sum: 5400 },
+      cancellations: { today: 1, week: 3, weekRate: 0.3 },
+    });
+    expect(msg).toBe(
+      '📊 Статистика (без скасованих)\n\n' +
+        '⏳ У черзі: 3 нових · 2 в роботі\n\n' +
+        '📅 Сьогодні: 2 замовл., 500 грн, 6 бут.\n' +
+        '🗓 Тиждень: 7 замовл., 1800 грн, 20 бут.\n' +
+        // average check = 1800 / 7 = 257.14… → rounded 257
+        '💵 Середній чек (тиждень): 257 грн\n' +
+        '📆 Місяць: 18 замовл., 5400 грн\n\n' +
+        '❌ Скасувань: 1 сьогодні · 3 за тиждень (30%)',
     );
+  });
+
+  it('statsMessage shows «—» for the average check and cancel rate on empty/zero data', () => {
+    const msg = statsMessage({
+      queue: { created: 0, accepted: 0 },
+      today: { count: 0, sum: 0, bottles: 0 },
+      week: { count: 0, sum: 0, bottles: 0 },
+      month: { count: 0, sum: 0 },
+      cancellations: { today: 0, week: 0, weekRate: null },
+    });
+    // Divide-by-zero guard: no week orders → both derived figures are «—».
+    expect(msg).toContain('💵 Середній чек (тиждень): —');
+    expect(msg).toContain('❌ Скасувань: 0 сьогодні · 0 за тиждень (—)');
   });
 
   it('pricesMessage lists the full grid and add-on prices', () => {

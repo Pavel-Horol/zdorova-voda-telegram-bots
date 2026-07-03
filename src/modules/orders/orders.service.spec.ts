@@ -950,34 +950,81 @@ describe('OrdersService', () => {
   });
 
   describe('stats (/stats summary)', () => {
-    it('sums today and the week without cancelled orders', async () => {
+    // The tx array order mirrors stats(): [queueCreated, queueAccepted,
+    // todayCount, todayAgg(sum), todayBottles(agg), weekCount, weekAgg(sum),
+    // weekBottles(agg), monthCount, monthAgg(sum), todayCancelled, weekCancelled].
+    it('groups queue, today/week/month volume+money, delivered bottles and cancellations (without cancelled in volume)', async () => {
       prisma.order.count.mockResolvedValue(0); // building the tx array
-      prisma.order.aggregate.mockResolvedValue({ _sum: { totalPrice: 0 } });
+      prisma.order.aggregate.mockResolvedValue({ _sum: {} });
       prisma.$transaction.mockResolvedValue([
-        2,
-        { _sum: { totalPrice: 500 } },
-        7,
-        { _sum: { totalPrice: 1800 } },
+        3, // queue created
+        2, // queue accepted
+        2, // today count
+        { _sum: { totalPrice: 500 } }, // today sum
+        { _sum: { bottles: 6 } }, // today delivered bottles
+        7, // week count
+        { _sum: { totalPrice: 1800 } }, // week sum
+        { _sum: { bottles: 20 } }, // week delivered bottles
+        18, // month count
+        { _sum: { totalPrice: 5400 } }, // month sum
+        1, // cancelled today
+        3, // cancelled week
       ]);
 
       await expect(service.stats()).resolves.toEqual({
-        today: { count: 2, sum: 500 },
-        week: { count: 7, sum: 1800 },
+        queue: { created: 3, accepted: 2 },
+        today: { count: 2, sum: 500, bottles: 6 },
+        week: { count: 7, sum: 1800, bottles: 20 },
+        month: { count: 18, sum: 5400 },
+        // rate = 3 cancelled / (7 non-cancelled + 3 cancelled) = 0.3
+        cancellations: { today: 1, week: 3, weekRate: 0.3 },
       });
     });
 
-    it('a null aggregate sum (no orders in the window) becomes 0, not null', async () => {
+    it('null aggregate sums/bottles (empty windows) become 0, not null', async () => {
       prisma.$transaction.mockResolvedValue([
-        0,
-        { _sum: { totalPrice: null } },
-        0,
-        { _sum: { totalPrice: null } },
+        0, // queue created
+        0, // queue accepted
+        0, // today count
+        { _sum: { totalPrice: null } }, // today sum
+        { _sum: { bottles: null } }, // today bottles
+        0, // week count
+        { _sum: { totalPrice: null } }, // week sum
+        { _sum: { bottles: null } }, // week bottles
+        0, // month count
+        { _sum: { totalPrice: null } }, // month sum
+        0, // cancelled today
+        0, // cancelled week
       ]);
 
       await expect(service.stats()).resolves.toEqual({
-        today: { count: 0, sum: 0 },
-        week: { count: 0, sum: 0 },
+        queue: { created: 0, accepted: 0 },
+        today: { count: 0, sum: 0, bottles: 0 },
+        week: { count: 0, sum: 0, bottles: 0 },
+        month: { count: 0, sum: 0 },
+        // no orders at all → weekRate is null (rendered as «—», no divide-by-zero).
+        cancellations: { today: 0, week: 0, weekRate: null },
       });
+    });
+
+    it('week cancel rate counts only cancellations (all non-cancelled, no cancels → 0)', async () => {
+      prisma.$transaction.mockResolvedValue([
+        0,
+        0,
+        0,
+        { _sum: { totalPrice: null } },
+        { _sum: { bottles: null } },
+        5, // week count (non-cancelled)
+        { _sum: { totalPrice: 1000 } },
+        { _sum: { bottles: null } },
+        5,
+        { _sum: { totalPrice: 1000 } },
+        0,
+        0, // no cancellations this week
+      ]);
+
+      const result = await service.stats();
+      expect(result.cancellations.weekRate).toBe(0); // 0 / (5 + 0)
     });
   });
 

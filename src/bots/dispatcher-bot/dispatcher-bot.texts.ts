@@ -9,6 +9,7 @@ import type {
   Dispatcher,
 } from '../../../generated/prisma/client';
 import type { EditablePriceField } from '../../modules/pricing-settings/pricing-settings.service';
+import type { StatsSummary } from '../../modules/orders/orders.service';
 
 const STATUS_HEADER: Record<OrderStatus, string> = {
   [OrderStatus.CREATED]: '🔔 НОВЕ ЗАМОВЛЕННЯ',
@@ -53,15 +54,29 @@ function formatDateTime(d: Date): string {
   }).format(d);
 }
 
-/** /stats summary (SPEC §7): today + this week, without cancelled. */
-export function statsMessage(stats: {
-  today: { count: number; sum: number };
-  week: { count: number; sum: number };
-}): string {
+/**
+ * /stats operator summary (SPEC §7). Volume/money exclude cancelled («без
+ * скасованих»); cancellations are reported separately. Compact and scannable —
+ * emoji-headed blocks: live queue, today, week (+ average check), month, cancels.
+ */
+export function statsMessage(stats: StatsSummary): string {
+  const { queue, today, week, month, cancellations } = stats;
+  // Average check = week money / week orders. Guard divide-by-zero → «—».
+  const avgCheck =
+    week.count > 0 ? `${Math.round(week.sum / week.count)} грн` : '—';
+  // Week cancel rate is null when there were no week orders at all.
+  const cancelRate =
+    cancellations.weekRate != null
+      ? `${Math.round(cancellations.weekRate * 100)}%`
+      : '—';
   return (
-    '📊 Статистика (без скасованих):\n' +
-    `Сьогодні: ${stats.today.count} замовлень, сума ${stats.today.sum} грн\n` +
-    `За тиждень: ${stats.week.count} замовлень, сума ${stats.week.sum} грн`
+    '📊 Статистика (без скасованих)\n\n' +
+    `⏳ У черзі: ${queue.created} нових · ${queue.accepted} в роботі\n\n` +
+    `📅 Сьогодні: ${today.count} замовл., ${today.sum} грн, ${today.bottles} бут.\n` +
+    `🗓 Тиждень: ${week.count} замовл., ${week.sum} грн, ${week.bottles} бут.\n` +
+    `💵 Середній чек (тиждень): ${avgCheck}\n` +
+    `📆 Місяць: ${month.count} замовл., ${month.sum} грн\n\n` +
+    `❌ Скасувань: ${cancellations.today} сьогодні · ${cancellations.week} за тиждень (${cancelRate})`
   );
 }
 
