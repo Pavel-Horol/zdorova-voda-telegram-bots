@@ -1180,6 +1180,45 @@ describe('OrdersService', () => {
       });
     });
 
+    it('findByShortIdPrefix: prefix match on id with client+address relations, newest first', async () => {
+      prisma.order.findMany.mockResolvedValue([]);
+
+      await service.findByShortIdPrefix('a1b2c3d4');
+
+      expect(prisma.order.findMany).toHaveBeenCalledWith({
+        where: { id: { startsWith: 'a1b2c3d4' } },
+        orderBy: { createdAt: 'desc' },
+        include: { client: true, address: true },
+      });
+    });
+
+    it('findByShortIdPrefix: no match → empty array', async () => {
+      prisma.order.findMany.mockResolvedValue([]);
+
+      await expect(service.findByShortIdPrefix('deadbeef')).resolves.toEqual(
+        [],
+      );
+    });
+
+    it('findByShortIdPrefix: a single match is returned', async () => {
+      prisma.order.findMany.mockResolvedValue([{ id: 'a1b2c3d4-...' }]);
+
+      await expect(service.findByShortIdPrefix('a1b2c3d4')).resolves.toEqual([
+        { id: 'a1b2c3d4-...' },
+      ]);
+    });
+
+    it('findByShortIdPrefix: multiple matches (short-prefix collision) are all returned', async () => {
+      prisma.order.findMany.mockResolvedValue([
+        { id: 'a1b2c3d4-1' },
+        { id: 'a1b2c3d4-2' },
+      ]);
+
+      await expect(
+        service.findByShortIdPrefix('a1b2c3d4'),
+      ).resolves.toHaveLength(2);
+    });
+
     it('waterUnitPrice: live grid price per bottle for the quantity (6 → from-6 tier)', async () => {
       await expect(service.waterUnitPrice(6)).resolves.toBe(65);
       await expect(service.waterUnitPrice(1)).resolves.toBe(80);
