@@ -16,6 +16,7 @@ import {
   routeDispatcherText,
   sortActiveQueue,
   summarizeQueue,
+  terminalActionOf,
   type QueueOrder,
 } from './dispatcher-bot.fsm';
 import { OrderKind, OrderStatus } from '../../../generated/prisma/enums';
@@ -200,6 +201,19 @@ describe('normalizeOrderIdArg', () => {
     expect(normalizeOrderIdArg('привіт')).toBeNull();
     expect(normalizeOrderIdArg('order xyz')).toBeNull();
     expect(normalizeOrderIdArg('g1h2i3j4')).toBeNull();
+  });
+});
+
+describe('terminalActionOf', () => {
+  it('maps the guarded card-button prefixes to their terminal action', () => {
+    expect(terminalActionOf('can')).toBe('cancel');
+    expect(terminalActionOf('del')).toBe('deliver');
+  });
+
+  it('an unknown prefix → null (untrusted callback data)', () => {
+    expect(terminalActionOf('acc')).toBeNull();
+    expect(terminalActionOf('')).toBeNull();
+    expect(terminalActionOf('canc')).toBeNull();
   });
 });
 

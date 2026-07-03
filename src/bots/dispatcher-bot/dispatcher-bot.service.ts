@@ -42,6 +42,10 @@ import {
   dispatchersListMessage,
   clientCardMessage,
   clientLookupPrompt,
+  confirmCancelKeyboard,
+  confirmCancelPrompt,
+  confirmDeliverKeyboard,
+  confirmDeliverPrompt,
   deliveryEtaAcceptNudge,
   deliveryEtaCustomPrompt,
   deliveryEtaKeyboard,
@@ -68,6 +72,8 @@ import {
   pricesKeyboard,
   pricesMessage,
   statsMessage,
+  undoCancelKeyboard,
+  undoCancelText,
 } from './dispatcher-bot.texts';
 import {
   ACTIVE_CARDS_CAP,
@@ -77,6 +83,7 @@ import {
   BTN_PRICES,
   BTN_STATS,
   type OrderEditField,
+  type TerminalAction,
   formatChatTitle,
   normalizeOrderIdArg,
   parseDispatcherInput,
@@ -87,6 +94,7 @@ import {
   routeDispatcherText,
   sortActiveQueue,
   summarizeQueue,
+  terminalActionOf,
 } from './dispatcher-bot.fsm';
 import { OrderStatus } from '../../../generated/prisma/enums';
 
@@ -193,8 +201,19 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
     bot.command('contacts', (ctx) => this.onContacts(ctx));
     bot.command('dispatchers', (ctx) => this.onDispatchers(ctx));
     bot.callbackQuery(/^acc:(.+)$/, (ctx) => this.onTransition(ctx, 'accept'));
-    bot.callbackQuery(/^del:(.+)$/, (ctx) => this.onTransition(ctx, 'deliver'));
-    bot.callbackQuery(/^can:(.+)$/, (ctx) => this.onTransition(ctx, 'cancel'));
+    // Terminal actions are two-step (mis-tap protection): the card button opens an
+    // are-you-sure confirm; only its "Так" runs the real transition.
+    bot.callbackQuery(/^del:(.+)$/, (ctx) => this.onConfirmRequest(ctx, 'del'));
+    bot.callbackQuery(/^can:(.+)$/, (ctx) => this.onConfirmRequest(ctx, 'can'));
+    bot.callbackQuery(/^canc:(.+)$/, (ctx) =>
+      this.onConfirmTerminal(ctx, 'cancel'),
+    );
+    bot.callbackQuery(/^delc:(.+)$/, (ctx) =>
+      this.onConfirmTerminal(ctx, 'deliver'),
+    );
+    bot.callbackQuery(/^cann:(.+)$/, (ctx) => this.onDismissConfirm(ctx));
+    bot.callbackQuery(/^deln:(.+)$/, (ctx) => this.onDismissConfirm(ctx));
+    bot.callbackQuery(/^unc:(.+)$/, (ctx) => this.onUndoCancel(ctx));
     bot.callbackQuery(/^edit:(.+)$/, (ctx) => this.onEditOrder(ctx));
     bot.callbackQuery(/^ef:(qty|addr|comment):(.+)$/, (ctx) =>
       this.onPickEditField(ctx),
@@ -268,6 +287,101 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
   ): Promise<void> {
     const view = await this.orders.getOrderView(id);
     if (!view) return;
+    await ctx.editMessageText(orderMessage(view, view.client, view.address), {
+      reply_markup: orderKeyboard(view.id, view.status, view.kind),
+    });
+  }
+
+  /**
+   * A terminal card button (❌ Скасувати / 🚚 Доставлено) was tapped: do NOT act yet —
+   * mis-tap protection. Replace the card in place with an are-you-sure confirm (no
+   * dangling keyboard, mirrors onEditOrder/onPickEditField). Only its "Так" runs the
+   * real transition; "Ні" redraws the normal card. `prefix` is untrusted callback data.
+   */
+  private async onConfirmRequest(
+    ctx: DispatcherContext,
+    prefix: string,
+  ): Promise<void> {
+    await ctx.answerCallbackQuery();
+    const id = ctx.match?.[1];
+    const action = terminalActionOf(prefix);
+    if (!id || !action) return;
+    const prompt =
+      action === 'cancel' ? confirmCancelPrompt(id) : confirmDeliverPrompt(id);
+    const keyboard =
+      action === 'cancel'
+        ? confirmCancelKeyboard(id)
+        : confirmDeliverKeyboard(id);
+    // editMessageText replaces the card with the confirm and drops the card's keyboard.
+    await ctx.editMessageText(prompt, { reply_markup: keyboard });
+  }
+
+  /**
+   * "Так" on a terminal confirm: run the guarded transition and redraw the card to its
+   * (button-less) terminal state. After a cancel also offer a one-tap undo — a separate
+   * message so the redrawn card is untouched (delivery gets no undo: tara is credited).
+   * An invalid transition (already handled / raced) → a toast, then redraw, no crash.
+   */
+  private async onConfirmTerminal(
+    ctx: DispatcherContext,
+    action: TerminalAction,
+  ): Promise<void> {
+    const id = ctx.match?.[1];
+    if (!id) {
+      await ctx.answerCallbackQuery();
+      return;
+    }
+    try {
+      if (action === 'deliver') await this.orders.markDelivered(id);
+      else await this.orders.cancelOrder(id);
+    } catch {
+      await ctx.answerCallbackQuery({ text: 'Вже оброблено або недоступно' });
+      await this.refreshOrderMessage(ctx, id);
+      return;
+    }
+    await ctx.answerCallbackQuery({ text: 'Готово' });
+    await this.refreshOrderMessage(ctx, id);
+    if (action === 'cancel') {
+      await ctx.reply(undoCancelText(id), {
+        reply_markup: undoCancelKeyboard(id),
+      });
+    }
+  }
+
+  /** "Ні" on a terminal confirm: keep the order — restore the normal card in place. */
+  private async onDismissConfirm(ctx: DispatcherContext): Promise<void> {
+    await ctx.answerCallbackQuery();
+    const id = ctx.match?.[1];
+    if (!id) return;
+    await this.refreshOrderMessage(ctx, id);
+  }
+
+  /**
+   * "↩️ Повернути": undo a just-made cancel (CANCELLED → CREATED via the guarded
+   * service method) and drop the undo message, replacing it with the revived card
+   * (buttons restored). A no-longer-cancelled order → a toast, no crash.
+   */
+  private async onUndoCancel(ctx: DispatcherContext): Promise<void> {
+    const id = ctx.match?.[1];
+    if (!id) {
+      await ctx.answerCallbackQuery();
+      return;
+    }
+    try {
+      await this.orders.revertCancellation(id);
+    } catch {
+      await ctx.answerCallbackQuery({ text: 'Уже не можна повернути' });
+      // Drop the now-useless undo button so it can't be tapped again.
+      await ctx.editMessageText('Уже не можна повернути.');
+      return;
+    }
+    await ctx.answerCallbackQuery({ text: 'Повернено' });
+    const view = await this.orders.getOrderView(id);
+    if (!view) {
+      await ctx.editMessageText('Замовлення повернено в роботу ✅');
+      return;
+    }
+    // Replace the undo message with the revived card (buttons restored) — no dead end.
     await ctx.editMessageText(orderMessage(view, view.client, view.address), {
       reply_markup: orderKeyboard(view.id, view.status, view.kind),
     });

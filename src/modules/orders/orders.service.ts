@@ -697,6 +697,25 @@ export class OrdersService {
   }
 
   /**
+   * CANCELLED → CREATED: undo a just-made dispatcher cancellation (mis-tap safety net,
+   * PRODUCT.md). Works ONLY while the order is still CANCELLED — an atomic guarded
+   * update (where includes status), like {@link cancelOrder}/{@link acceptOrder}, so a
+   * double undo or a race can't resurrect an order twice. Reverts to CREATED (the
+   * pre-accept active state); the dispatcher re-accepts if needed. No client push: a
+   * cancel-then-undo is a dispatcher correction the client should not see flip-flop.
+   */
+  async revertCancellation(id: string): Promise<Order> {
+    const order = await this.prisma.order.findUniqueOrThrow({ where: { id } });
+    if (order.status !== OrderStatus.CANCELLED) {
+      throw new Error(`cannot revert order ${id} in status ${order.status}`);
+    }
+    return this.prisma.order.update({
+      where: { id, status: OrderStatus.CANCELLED },
+      data: { status: OrderStatus.CREATED },
+    });
+  }
+
+  /**
    * Notifies subscribers about an order status change by the dispatcher (the client
    * bot will notify the client, SPEC §8). Only for dispatcher transitions —
    * cancellation by the client (cancelOwnOrder) is NOT routed here.
