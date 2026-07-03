@@ -4,7 +4,9 @@ import {
   BTN_ORDERS,
   BTN_PRICES,
   BTN_STATS,
+  formatAge,
   formatChatTitle,
+  formatQueueLine,
   normalizeOrderIdArg,
   parseDispatcherInput,
   parseEditedQuantity,
@@ -12,7 +14,11 @@ import {
   parsePriceValue,
   phoneSearchToken,
   routeDispatcherText,
+  sortActiveQueue,
+  summarizeQueue,
+  type QueueOrder,
 } from './dispatcher-bot.fsm';
+import { OrderKind, OrderStatus } from '../../../generated/prisma/enums';
 
 /**
  * Characterization tests for the dispatcher's onText: pin the CURRENT branching
@@ -337,6 +343,119 @@ describe('parseGeoInput', () => {
     ).toBeNull();
     expect(parseGeoInput('5')).toBeNull();
     expect(parseGeoInput('привіт')).toBeNull();
+  });
+});
+
+describe('formatAge', () => {
+  const now = new Date('2026-07-03T12:00:00.000Z');
+  const ago = (ms: number) => new Date(now.getTime() - ms);
+
+  it('under a minute → «щойно» (and clamps future/equal instants)', () => {
+    expect(formatAge(ago(0), now)).toBe('щойно');
+    expect(formatAge(ago(59_000), now)).toBe('щойно');
+    expect(formatAge(new Date(now.getTime() + 5_000), now)).toBe('щойно');
+  });
+
+  it('whole minutes → «N хв»', () => {
+    expect(formatAge(ago(60_000), now)).toBe('1 хв');
+    expect(formatAge(ago(42 * 60_000), now)).toBe('42 хв');
+    expect(formatAge(ago(59 * 60_000), now)).toBe('59 хв');
+  });
+
+  it('whole hours → «N год»', () => {
+    expect(formatAge(ago(60 * 60_000), now)).toBe('1 год');
+    expect(formatAge(ago(5 * 60 * 60_000), now)).toBe('5 год');
+    expect(formatAge(ago(23 * 60 * 60_000), now)).toBe('23 год');
+  });
+
+  it('whole days → «N дн»', () => {
+    expect(formatAge(ago(24 * 60 * 60_000), now)).toBe('1 дн');
+    expect(formatAge(ago(3 * 24 * 60 * 60_000), now)).toBe('3 дн');
+  });
+});
+
+describe('active orders queue (sort / summarize / one-liner)', () => {
+  const now = new Date('2026-07-03T12:00:00.000Z');
+  const at = (min: number) => new Date(now.getTime() - min * 60_000);
+  const mk = (over: Partial<QueueOrder>): QueueOrder => ({
+    id: 'aaaaaaaabbbb',
+    status: OrderStatus.CREATED,
+    kind: OrderKind.REPEAT,
+    createdAt: at(10),
+    ...over,
+  });
+
+  it('sortActiveQueue: CREATED before ACCEPTED, oldest first within each, no mutation', () => {
+    const input = [
+      mk({ id: 'accNew', status: OrderStatus.ACCEPTED, createdAt: at(5) }),
+      mk({ id: 'newOld', status: OrderStatus.CREATED, createdAt: at(40) }),
+      mk({ id: 'accOld', status: OrderStatus.ACCEPTED, createdAt: at(60) }),
+      mk({ id: 'newNew', status: OrderStatus.CREATED, createdAt: at(2) }),
+    ];
+    const copy = [...input];
+    const out = sortActiveQueue(input);
+    expect(out.map((o) => o.id)).toEqual([
+      'newOld',
+      'newNew',
+      'accOld',
+      'accNew',
+    ]);
+    expect(input).toEqual(copy); // input untouched
+  });
+
+  it('summarizeQueue: counts by status + oldest unhandled (first CREATED of sorted)', () => {
+    const sorted = sortActiveQueue([
+      mk({ id: 'newOld', status: OrderStatus.CREATED, createdAt: at(40) }),
+      mk({ id: 'newNew', status: OrderStatus.CREATED, createdAt: at(2) }),
+      mk({ id: 'acc', status: OrderStatus.ACCEPTED, createdAt: at(5) }),
+    ]);
+    const s = summarizeQueue(sorted);
+    expect(s.total).toBe(3);
+    expect(s.created).toBe(2);
+    expect(s.accepted).toBe(1);
+    expect(s.oldestCreated?.id).toBe('newOld');
+  });
+
+  it('summarizeQueue: no unhandled → oldestCreated is null', () => {
+    const s = summarizeQueue([mk({ status: OrderStatus.ACCEPTED })]);
+    expect(s.created).toBe(0);
+    expect(s.accepted).toBe(1);
+    expect(s.oldestCreated).toBeNull();
+  });
+
+  it('formatQueueLine: icon, short id, kind mark and age', () => {
+    expect(
+      formatQueueLine(
+        mk({
+          id: 'a1b2c3d4ffff',
+          status: OrderStatus.CREATED,
+          kind: OrderKind.OWN_TARA,
+          createdAt: at(42),
+        }),
+        now,
+      ),
+    ).toBe('🆕 #a1b2c3d4 · своя тара · 42 хв');
+    expect(
+      formatQueueLine(
+        mk({
+          id: 'a1b2c3d4ffff',
+          status: OrderStatus.ACCEPTED,
+          kind: OrderKind.REPEAT,
+          createdAt: at(70),
+        }),
+        now,
+      ),
+    ).toBe('✅ #a1b2c3d4 · обмін · 1 год');
+    expect(
+      formatQueueLine(
+        mk({
+          id: 'a1b2c3d4ffff',
+          kind: OrderKind.STARTER_KIT,
+          createdAt: at(0),
+        }),
+        now,
+      ),
+    ).toBe('🆕 #a1b2c3d4 · перше · щойно');
   });
 });
 

@@ -10,6 +10,12 @@ import type {
 } from '../../../generated/prisma/client';
 import type { EditablePriceField } from '../../modules/pricing-settings/pricing-settings.service';
 import type { StatsSummary } from '../../modules/orders/orders.service';
+import {
+  formatAge,
+  formatQueueLine,
+  type QueueOrder,
+  type QueueSummary,
+} from './dispatcher-bot.fsm';
 
 const STATUS_HEADER: Record<OrderStatus, string> = {
   [OrderStatus.CREATED]: '🔔 НОВЕ ЗАМОВЛЕННЯ',
@@ -41,6 +47,35 @@ export const dispatcherWelcome =
 /** Header of the active orders list (/orders). */
 export function activeOrdersHeader(count: number): string {
   return `📋 Активні замовлення: ${count}`;
+}
+
+/**
+ * Summary shown at the top of /orders (before any cards): total active, the split by
+ * status (🆕 new = CREATED, ✅ in progress = ACCEPTED), the age of the oldest unhandled
+ * order, then a one-liner per order (already sorted by {@link sortActiveQueue}). This is
+ * the readable overview that replaces re-flooding the chat with full cards. `now` decides
+ * every age (passed in — the pure helpers stay deterministic).
+ */
+export function activeOrdersSummary(
+  sorted: QueueOrder[],
+  summary: QueueSummary,
+  now: Date,
+): string {
+  const head = `📋 Активні: ${summary.total} · 🆕 нових: ${summary.created} · ✅ в роботі: ${summary.accepted}`;
+  const oldest = summary.oldestCreated
+    ? `\n⏳ найстаріше нове: ${formatAge(summary.oldestCreated.createdAt, now)} тому`
+    : '';
+  const lines = sorted.map((o) => formatQueueLine(o, now)).join('\n');
+  return `${head}${oldest}\n\n${lines}`;
+}
+
+/**
+ * Note appended after the full cards when the queue was capped (> ACTIVE_CARDS_CAP): only
+ * the unhandled (CREATED) orders get actionable cards; the `restInProgress` accepted ones
+ * stay in the summary above, so the chat is not flooded. Omitted when nothing was capped.
+ */
+export function activeOrdersCappedNote(restInProgress: number): string {
+  return `…та ще ${restInProgress} в роботі — вище у зведенні 👆`;
 }
 
 /** Order date-time in the card: Kyiv time, format "DD.MM, HH:MM". */

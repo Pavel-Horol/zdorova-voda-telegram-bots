@@ -7,7 +7,9 @@ import type {
 } from '../../../generated/prisma/client';
 import { OrderKind, OrderStatus } from '../../../generated/prisma/enums';
 import {
+  activeOrdersCappedNote,
   activeOrdersHeader,
+  activeOrdersSummary,
   contactsKeyboard,
   contactsListMessage,
   callbackRequestMessage,
@@ -29,6 +31,7 @@ import {
   pricesMessage,
   statsMessage,
 } from './dispatcher-bot.texts';
+import type { QueueOrder, QueueSummary } from './dispatcher-bot.fsm';
 
 // Minimal shapes — driverLine only reads the fields below.
 function makeOrder(over: Partial<Order> = {}): Order {
@@ -484,6 +487,65 @@ describe('summary / prompt texts', () => {
 
   it('activeOrdersHeader includes the count', () => {
     expect(activeOrdersHeader(3)).toBe('📋 Активні замовлення: 3');
+  });
+
+  describe('active orders summary (/orders overview)', () => {
+    const now = new Date('2026-07-03T12:00:00.000Z');
+    const at = (min: number) => new Date(now.getTime() - min * 60_000);
+    const line = (over: Partial<QueueOrder>): QueueOrder => ({
+      id: 'aaaaaaaabbbb',
+      status: OrderStatus.CREATED,
+      kind: OrderKind.REPEAT,
+      createdAt: at(10),
+      ...over,
+    });
+
+    it('header with totals by status, oldest-new age, and a one-liner per order', () => {
+      const sorted: QueueOrder[] = [
+        line({
+          id: 'a1b2c3d4ffff',
+          status: OrderStatus.CREATED,
+          kind: OrderKind.OWN_TARA,
+          createdAt: at(42),
+        }),
+        line({
+          id: 'e5f6a7b8ffff',
+          status: OrderStatus.ACCEPTED,
+          kind: OrderKind.REPEAT,
+          createdAt: at(70),
+        }),
+      ];
+      const summary: QueueSummary = {
+        total: 2,
+        created: 1,
+        accepted: 1,
+        oldestCreated: sorted[0],
+      };
+      const out = activeOrdersSummary(sorted, summary, now);
+      expect(out).toContain('📋 Активні: 2 · 🆕 нових: 1 · ✅ в роботі: 1');
+      expect(out).toContain('⏳ найстаріше нове: 42 хв тому');
+      expect(out).toContain('🆕 #a1b2c3d4 · своя тара · 42 хв');
+      expect(out).toContain('✅ #e5f6a7b8 · обмін · 1 год');
+    });
+
+    it('omits the oldest-new line when nothing is unhandled', () => {
+      const sorted: QueueOrder[] = [
+        line({ status: OrderStatus.ACCEPTED, createdAt: at(5) }),
+      ];
+      const summary: QueueSummary = {
+        total: 1,
+        created: 0,
+        accepted: 1,
+        oldestCreated: null,
+      };
+      const out = activeOrdersSummary(sorted, summary, now);
+      expect(out).toContain('🆕 нових: 0');
+      expect(out).not.toContain('найстаріше нове');
+    });
+
+    it('activeOrdersCappedNote references the remaining in-progress count', () => {
+      expect(activeOrdersCappedNote(4)).toContain('ще 4 в роботі');
+    });
   });
 
   it('the prompts reference the short order id (first 8 chars)', () => {
