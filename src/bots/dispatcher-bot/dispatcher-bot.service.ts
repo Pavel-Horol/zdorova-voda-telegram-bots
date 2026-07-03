@@ -26,7 +26,8 @@ import {
   type DispatcherSession,
 } from './dispatcher-bot.bot';
 import {
-  activeOrdersHeader,
+  activeOrdersCappedNote,
+  activeOrdersSummary,
   addContactPrompt,
   addDispatcherPrompt,
   contactAddInvalid,
@@ -67,6 +68,7 @@ import {
   statsMessage,
 } from './dispatcher-bot.texts';
 import {
+  ACTIVE_CARDS_CAP,
   BTN_CLIENT,
   BTN_CONTACTS,
   BTN_ORDERS,
@@ -80,7 +82,10 @@ import {
   parsePriceValue,
   phoneSearchToken,
   routeDispatcherText,
+  sortActiveQueue,
+  summarizeQueue,
 } from './dispatcher-bot.fsm';
+import { OrderStatus } from '../../../generated/prisma/enums';
 
 /** Quantity cap when editing an order — guard against a typo (dispatcher is trusted). */
 const MAX_EDIT_QTY = 100;
@@ -277,9 +282,12 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * /orders (and the "📋 Активні" button) — the work queue: orders in statuses
-   * created/accepted, each as a separate card with action buttons, so they can be
-   * handled even if the original push scrolled up the chat.
+   * /orders (and the "📋 Активні" button) — the work queue as a readable overview, not a
+   * flood: a summary header (totals by status + age of the oldest unhandled order) with a
+   * one-liner per active order, then the full actionable cards oldest-first, unhandled
+   * (CREATED) first. When the queue is large (> ACTIVE_CARDS_CAP) only the unhandled
+   * orders get full cards — the rest stay in the summary above (with a note), so the chat
+   * is not flooded. All ordering/age math is pure (dispatcher-bot.fsm), `now` passed in.
    */
   private async onActiveOrders(ctx: DispatcherContext): Promise<void> {
     const orders = await this.orders.listActive();
@@ -287,11 +295,24 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
       await ctx.reply(noActiveOrders);
       return;
     }
-    await ctx.reply(activeOrdersHeader(orders.length));
-    for (const order of orders) {
+    const now = new Date();
+    const sorted = sortActiveQueue(orders);
+    const summary = summarizeQueue(sorted);
+    await ctx.reply(activeOrdersSummary(sorted, summary, now));
+
+    // Over the cap: full cards only for the unhandled (CREATED) orders; the accepted
+    // ones remain in the summary above (referenced by the note) to avoid the flood.
+    const capped = sorted.length > ACTIVE_CARDS_CAP;
+    const cards = capped
+      ? sorted.filter((o) => o.status === OrderStatus.CREATED)
+      : sorted;
+    for (const order of cards) {
       await ctx.reply(orderMessage(order, order.client, order.address), {
         reply_markup: orderKeyboard(order.id, order.status, order.kind),
       });
+    }
+    if (capped && summary.accepted > 0) {
+      await ctx.reply(activeOrdersCappedNote(summary.accepted));
     }
   }
 

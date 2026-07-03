@@ -5,6 +5,7 @@
  * the data; ready primitives are passed in here.
  */
 import type { EditablePriceField } from '../../modules/pricing-settings/pricing-settings.service';
+import { OrderStatus, OrderKind } from '../../../generated/prisma/enums';
 
 // Labels of the persistent menu reply buttons (also the keys of the text router).
 export const BTN_ORDERS = '📋 Активні';
@@ -235,4 +236,112 @@ export function parseGeoInput(raw: string): GeoCoords | null {
   m = text.match(/^(-?\d{1,2}(?:\.\d+)?)\s*,\s*(-?\d{1,3}(?:\.\d+)?)$/);
   if (m) return toCoords(m[1], m[2]);
   return null;
+}
+
+/**
+ * If more than this many orders are active, /orders resends the full actionable
+ * cards ONLY for the unhandled (CREATED) ones — the rest stay in the summary above,
+ * so the queue does not flood the chat (the whole point of the summary view).
+ */
+export const ACTIVE_CARDS_CAP = 10;
+
+/**
+ * Minimal order shape the queue logic needs — the fields that decide ordering and the
+ * one-liner. Deliberately narrow so the sort/format helpers stay pure and easy to test
+ * (the handler passes the full {@link OrderWithRelations}, which structurally matches).
+ */
+export interface QueueOrder {
+  id: string;
+  status: OrderStatus;
+  kind: OrderKind;
+  createdAt: Date;
+}
+
+/**
+ * Formats how long ago `from` was, relative to `now` (both passed in — NO Date.now()
+ * here, so tests are deterministic). Buckets: under a minute → «щойно», then whole
+ * minutes «N хв», hours «N год», days «N дн». A future/equal instant clamps to «щойно».
+ */
+export function formatAge(from: Date, now: Date): string {
+  const ms = now.getTime() - from.getTime();
+  const minutes = Math.floor(ms / 60000);
+  if (minutes < 1) return 'щойно';
+  if (minutes < 60) return `${minutes} хв`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} год`;
+  const days = Math.floor(hours / 24);
+  return `${days} дн`;
+}
+
+/**
+ * Orders the active queue for the dispatcher: unhandled first (CREATED before ACCEPTED),
+ * and within each status the oldest `createdAt` first (FIFO — the longest-waiting order
+ * is handled first). Pure and stable; does not mutate the input array.
+ */
+export function sortActiveQueue<T extends QueueOrder>(
+  orders: readonly T[],
+): T[] {
+  const rank = (s: OrderStatus): number => (s === OrderStatus.CREATED ? 0 : 1);
+  return [...orders].sort((a, b) => {
+    const byStatus = rank(a.status) - rank(b.status);
+    if (byStatus !== 0) return byStatus;
+    return a.createdAt.getTime() - b.createdAt.getTime();
+  });
+}
+
+/** Short kind mark for the one-liner (mirrors the fuller marks on the card). */
+function queueKindMark(kind: OrderKind): string {
+  switch (kind) {
+    case OrderKind.OWN_TARA:
+      return 'своя тара';
+    case OrderKind.STARTER_KIT:
+      return 'перше';
+    default:
+      return 'обмін';
+  }
+}
+
+/** Status icon for the one-liner: 🆕 unhandled (CREATED), ✅ in progress (ACCEPTED). */
+function queueStatusIcon(status: OrderStatus): string {
+  return status === OrderStatus.CREATED ? '🆕' : '✅';
+}
+
+/**
+ * One-liner for an order in the summary list: status icon, short id, kind mark and age
+ * (e.g. «🆕 #a1b2c3d4 · своя тара · 42 хв»). Pure — `now` decides the age.
+ */
+export function formatQueueLine(order: QueueOrder, now: Date): string {
+  const icon = queueStatusIcon(order.status);
+  const id = `#${order.id.slice(0, 8)}`;
+  const mark = queueKindMark(order.kind);
+  const age = formatAge(order.createdAt, now);
+  return `${icon} ${id} · ${mark} · ${age}`;
+}
+
+/** Split of the active queue into counts + the age of the oldest unhandled order. */
+export interface QueueSummary {
+  total: number;
+  created: number;
+  accepted: number;
+  /** Age of the oldest CREATED (unhandled) order, or null when none are unhandled. */
+  oldestCreated: QueueOrder | null;
+}
+
+/**
+ * Reduces the (already sorted) queue to its summary counts + the oldest unhandled order.
+ * Expects the queue in {@link sortActiveQueue} order, so the first CREATED is the oldest.
+ */
+export function summarizeQueue(sorted: readonly QueueOrder[]): QueueSummary {
+  let created = 0;
+  let accepted = 0;
+  let oldestCreated: QueueOrder | null = null;
+  for (const o of sorted) {
+    if (o.status === OrderStatus.CREATED) {
+      created += 1;
+      if (!oldestCreated) oldestCreated = o;
+    } else {
+      accepted += 1;
+    }
+  }
+  return { total: sorted.length, created, accepted, oldestCreated };
 }
