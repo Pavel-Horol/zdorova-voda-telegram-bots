@@ -1,0 +1,19 @@
+#!/usr/bin/env sh
+#
+# Локальный квалити-гейт перед push. Зеркалит CI (.github/workflows/ci.yml),
+# кроме `build` — dist локально бывает root-owned после docker-запуска, а CI
+# сборку всё равно проверяет.
+#
+# Пропустить в исключительном случае: git push --no-verify
+#
+set -e
+
+echo "▶ pre-push: quality gate (lint · types · arch · tests)"
+
+npm run prisma:generate --silent
+npm run lint:ci --silent
+npm run typecheck --silent
+npm run arch:check --silent
+npm test --silent
+
+echo "✓ gate passed — pushing"
