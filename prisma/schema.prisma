@@ -9,6 +9,11 @@ generator client {
   // Without this the new Prisma 7 generator emits ESM sources with import.meta.url,
   // which break at runtime under Node ("exports is not defined in ES module scope").
   moduleFormat = "cjs"
+  // Import extension inside the generated client. Auto-detected from tsconfig, but that
+  // detection needs tsconfig present at generate time (e.g. in Docker `prisma generate`
+  // can run before tsconfig is copied). Pinning "js" makes compiled dist require ./x.js —
+  // without it the generator may emit require("./internal/class.ts") → runtime MODULE_NOT_FOUND.
+  importFileExtension = "js"
 }
 
 datasource db {

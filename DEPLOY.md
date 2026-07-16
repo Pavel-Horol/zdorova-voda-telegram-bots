@@ -1,0 +1,165 @@
+# DEPLOY.md — хостинг aqua-bot на своём VPS
+
+Пошаговый runbook: от пустого сервера до работающего бота. Рассчитан на первый
+самостоятельный деплой. Стек на сервере: **бот + Postgres в двух Docker-контейнерах**
+на одном VPS, управляются через `docker compose`.
+
+> Почему так, а не Kubernetes/облако: бот на **long polling** — входящий трафик,
+> домен и webhook НЕ нужны, нужен просто процесс 24/7 + база. Один VPS + compose —
+> это адекватный прод для проекта такого масштаба, а не «ненастоящий» хостинг.
+
+---
+
+## 0. Что понадобится
+- VPS с Ubuntu 22.04/24.04 (Hetzner CX22 ~4–5 €/мес с запасом, или любой аналог).
+  Минимум 1 vCPU / 2 GB RAM.
+- Доступ по SSH (при создании сервера добавь свой SSH-ключ).
+- Два **прод**-токена ботов от [@BotFather](https://t.me/BotFather) — отдельные,
+  которые больше нигде не запущены (иначе `409 Conflict`, см. §8).
+- `chat_id` супер-админа-диспетчера (узнать: напиши боту, глянь апдейт, или через
+  [@userinfobot](https://t.me/userinfobot)).
+
+---
+
+## 1. Заходим на сервер
+```bash
+ssh root@ВАШ_IP
+```
+
+## 2. Ставим Docker (официальный скрипт)
+```bash
+curl -fsSL https://get.docker.com | sh
+docker --version                # проверка: должна быть версия
+docker compose version          # compose v2 идёт в комплекте
+```
+
+## 3. (Рекомендуется) отдельный пользователь вместо root
+```bash
+adduser deploy
+usermod -aG docker deploy       # чтобы docker без sudo
+rsync --archive --chown=deploy:deploy ~/.ssh /home/deploy   # перенести SSH-ключ
+# дальше заходим уже как deploy:
+#   ssh deploy@ВАШ_IP
+```
+
+## 4. Забираем код
+```bash
+cd ~
+git clone https://github.com/ВАШ_ЮЗЕР/aqua-bot.git
+cd aqua-bot
+git checkout master             # или та ветка, которую деплоите
+```
+> Приватный репозиторий? Настрой [deploy key](https://docs.github.com/en/authentication/connecting-to-github-with-ssh)
+> или клонируй по HTTPS с Personal Access Token.
+
+## 5. Заполняем секреты
+```bash
+cp .env.production.example .env
+nano .env
+```
+Заполни в `.env`:
+- `POSTGRES_PASSWORD` — придумай надёжный (НЕ `aqua`).
+- `CLIENT_BOT_TOKEN`, `DISPATCHER_BOT_TOKEN` — прод-токены.
+- `DISPATCHER_CHAT_ID` — id супер-админа.
+- `SUPPORT_PHONE` — реальный номер (без него бот НЕ стартует).
+
+`DATABASE_URL` задавать НЕ нужно — его собирает `docker-compose.prod.yml` из
+`POSTGRES_*` (хост базы внутри сети — `db`). Файл `.env` в `.gitignore`, в репозиторий
+не попадёт.
+
+## 6. Запускаем
+```bash
+docker compose -f docker-compose.prod.yml up -d --build
+```
+Что произойдёт:
+1. Соберётся прод-образ (multi-stage: генерация Prisma-клиента → `nest build`).
+2. Поднимется Postgres, дождётся healthcheck.
+3. Контейнер бота на старте прогонит `prisma migrate deploy` (накатит схему), затем
+   запустит `node dist/src/main`.
+
+## 7. Проверяем, что живой
+```bash
+docker compose -f docker-compose.prod.yml ps          # оба сервиса Up
+docker compose -f docker-compose.prod.yml logs -f app # логи бота
+```
+В логах должно быть `Nest application successfully started` и НЕ должно быть
+`401 Unauthorized` (401 = неверный токен). Затем напиши боту в Telegram — он ответит.
+`Ctrl+C` выходит из просмотра логов (контейнер продолжает работать).
+
+---
+
+## 8. ⚠️ Единственный инстанс на токен (важно!)
+Telegram разрешает **один** polling-процесс на токен. Второй даёт `409 Conflict` и
+боты начинают «моргать». Отсюда правила:
+- Эти прод-токены не запускай локально/на другом сервере одновременно.
+- При обновлении (см. §9) `compose up` пересоздаёт контейнер: старый гасится ДО старта
+  нового — короткий (секунды) даунтайг вместо наложения. Это норма, не бойся.
+
+---
+
+## 9. Обновление (выкатка нового кода)
+```bash
+cd ~/aqua-bot
+git pull
+docker compose -f docker-compose.prod.yml up -d --build
+```
+Compose пересоберёт образ, пересоздаст только изменившиеся контейнеры. Миграции
+накатятся автоматически на старте. Postgres не трогается — данные на месте.
+
+## 10. Откат
+```bash
+git checkout <предыдущий_коммит_или_тег>
+docker compose -f docker-compose.prod.yml up -d --build
+```
+> ⚠️ Откат кода НЕ откатывает уже применённые миграции БД. Ломающие миграции пиши
+> совместимыми (expand/contract), либо готовь обратную миграцию отдельно.
+
+---
+
+## 11. Бэкапы базы (сделай СРАЗУ, не потом)
+Разовый дамп:
+```bash
+docker compose -f docker-compose.prod.yml exec db \
+  pg_dump -U aqua aqua | gzip > ~/aqua-backup-$(date +%F).sql.gz
+```
+Автобэкап раз в сутки через cron (`crontab -e`):
+```
+0 3 * * * cd /home/deploy/aqua-bot && docker compose -f docker-compose.prod.yml exec -T db pg_dump -U aqua aqua | gzip > /home/deploy/backups/aqua-$(date +\%F).sql.gz
+```
+Восстановление:
+```bash
+gunzip -c ~/aqua-backup-2026-07-16.sql.gz | \
+  docker compose -f docker-compose.prod.yml exec -T db psql -U aqua -d aqua
+```
+> Данные лежат в Docker volume `pgdata` и переживают пересборку контейнеров. Но volume
+> НЕ защищает от «снёс сервер» — держи дампы вне VPS (скачивай `scp`, или лей в S3).
+
+---
+
+## 12. Полезные команды
+```bash
+docker compose -f docker-compose.prod.yml logs -f app     # логи бота
+docker compose -f docker-compose.prod.yml restart app     # рестарт только бота
+docker compose -f docker-compose.prod.yml down            # остановить всё (данные целы)
+docker compose -f docker-compose.prod.yml down -v         # ⚠️ снести ВМЕСТЕ с базой
+docker system prune -f                                    # почистить мусор образов
+```
+
+---
+
+## 13. Что дальше — CI/CD (автовыкатка)
+Сейчас деплой ручной (§9). Автоматизация: GitHub Actions на push в `master` заходит на
+сервер по SSH и выполняет `git pull && docker compose -f docker-compose.prod.yml up -d --build`.
+Нужен deploy-ключ + секреты в репозитории (`SSH_HOST`, `SSH_USER`, `SSH_KEY`). CI-часть
+(lint/types/tests) уже есть в `.github/workflows/ci.yml` — CD добавляется отдельным
+workflow. Сначала пройди ручной деплой хотя бы раз — так поймёшь каждый шаг, который
+потом автоматизируешь.
+
+---
+
+## Заметки по безопасности (по желанию, для харденинга)
+- Включи firewall: `ufw allow OpenSSH && ufw enable` (порт БД наружу не открыт —
+  в compose он привязан к `127.0.0.1`).
+- Отключи SSH по паролю, оставь только ключи.
+- Контейнер бота сейчас работает от root внутри изоляции — для харденинга можно добавить
+  непривилегированного пользователя в `Dockerfile.prod` (`USER node`).
