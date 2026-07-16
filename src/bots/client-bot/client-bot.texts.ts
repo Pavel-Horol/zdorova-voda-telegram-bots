@@ -46,10 +46,15 @@ export const texts = {
     return `${hello}\nЧим допоможемо?`;
   },
 
-  /** AWAIT_ADDRESS — first order (SPEC §6). */
+  /** AWAIT_ADDRESS — first order (SPEC §6). Details (floor/intercom) are asked next. */
   awaitAddress:
-    'Схоже, ви замовляєте вперше 👋 Вкажіть адресу доставки: вулиця, будинок, ' +
-    'квартира. Якщо є — додайте поверх, код домофона, орієнтир.',
+    'Схоже, ви замовляєте вперше 👋 Напишіть адресу доставки: вулиця, ' +
+    'будинок, квартира — напр.: Гагаріна, 12, кв. 5.',
+
+  /** Changing an EXISTING address (standalone management or editing on Confirm). */
+  changeAddress:
+    'Введіть нову адресу доставки: вулиця, будинок, квартира — ' +
+    'напр.: Гагаріна, 12, кв. 5.',
 
   /** AWAIT_COMMENT — address details (floor/intercom/landmark), optional. */
   awaitComment:
@@ -66,15 +71,19 @@ export const texts = {
   onboarding:
     'Щоб порахувати правильно — що у вас уже є?\n\n' +
     '🆕 Стартовий комплект — потрібні бак, помпа та вода\n' +
-    '💧 У мене вже є баки (19 л) — і свої, і ваші; залог не платите\n' +
+    '💧 У мене вже є баки (19 л) — і свої, і ваші; заставу не платите\n' +
     '⚙️ Інше — попросити диспетчера передзвонити',
 
-  /** Number of bottles on hand (the "I already have bottles" branch → OWN_TARA). */
+  /** Number of bottles on hand — button screen (the "I already have bottles" branch → OWN_TARA). */
+  ownTaraChoose:
+    'Скільки у вас баків (19 л) на руках? На стільки порахуємо обмін.',
+
+  /** Number of bottles on hand — manual entry ("Інша кількість"). */
   ownTaraCount:
-    'Скільки у вас баків (19 л) на руках? Надішліть числом — на стільки порахуємо обмін.',
+    'Скільки у вас баків (19 л) на руках? Надішліть числом — напр.: 8.',
 
   /** Invalid number of bottles. */
-  ownTaraInvalid: 'Потрібне число від 1. Скільки у вас баків?',
+  ownTaraInvalid: 'Потрібне число від 1 — напр.: 8. Скільки у вас баків?',
 
   /** Starter kit composition + pump type choice (T5). */
   pumpChoice(prices: PriceSettings): string {
@@ -117,7 +126,7 @@ export const texts = {
    * Branches on quote.kind: STARTER_KIT shows the starter-kit breakdown, the
    * rest — price per bottle. Address — raw + comment in parentheses.
    */
-  confirm(quote: OrderQuote, address: Address): string {
+  confirm(quote: OrderQuote, address: Address, note?: string | null): string {
     const word = bottlesWord(quote.bottles);
     let breakdown: string;
     if (quote.kind === OrderKind.STARTER_KIT) {
@@ -138,13 +147,19 @@ export const texts = {
     // Pump add-on for own bottles (OWN_TARA without a pump).
     if (quote.pumpAddon) breakdown += ` + помпа ${quote.pumpPrice}`;
     const comment = address.comment ? ` (${address.comment})` : '';
+    const noteLine = note ? `\n📝 ${note}` : '';
     return (
       'Хочу замовити:\n' +
       `📦 ${quote.bottles} ${word} (${breakdown})\n` +
-      `📍 ${address.raw}${comment}\n` +
+      `📍 ${address.raw}${comment}${noteLine}\n` +
       `💰 До сплати: ${quote.totalPrice} грн (готівкою водієві)`
     );
   },
+
+  /** Prompt for the optional client note about this order (from Confirm). */
+  orderNotePrompt:
+    'Напишіть коментар до замовлення (напр. «мене не буде з 14 до 16», ' +
+    '«дзвоніть за годину»):',
 
   /** ORDER_DONE (SPEC §6). */
   orderDone:
@@ -165,6 +180,30 @@ export const texts = {
       default:
         return null;
     }
+  },
+
+  /**
+   * Notify the client that the dispatcher edited their order (SPEC §7): shows the
+   * current quantity and total so a quantity/price change is visible, and works for
+   * an address/comment edit too (numbers stay the same, the message just confirms it).
+   */
+  orderEdited(order: Order): string {
+    const word = bottlesWord(order.bottles);
+    return (
+      'Ваше замовлення оновлено диспетчером 📝\n' +
+      `Зараз: ${order.bottles} ${word}, сума ${order.totalPrice} грн.`
+    );
+  },
+
+  /**
+   * Notify the client about the delivery-timing message the dispatcher set for their
+   * order (🕒): "сьогодні", "перенесено на завтра", "протягом години", … The dispatcher
+   * writes the phrase; we just wrap it. Empty/blank note → null (nothing to send).
+   */
+  deliveryNoteUpdate(order: Order): string | null {
+    const note = order.deliveryNote?.trim();
+    if (!note) return null;
+    return `🕒 Час доставки вашого замовлення: ${note}`;
   },
 
   /** Order creation failed — ask to retry (edge §9). */
@@ -189,6 +228,15 @@ export const texts = {
     return `📋 Ваші останні замовлення:\n${lines.join('\n')}`;
   },
 
+  /**
+   * Label of the cancel button under an order in "My orders". Shows date + quantity
+   * (not a raw id fragment) so the client can tell which order they are cancelling.
+   */
+  cancelOrderButton(order: Order): string {
+    const word = bottlesWord(order.bottles);
+    return `❌ Скасувати: ${order.bottles} ${word} (${shortDate(order.createdAt)})`;
+  },
+
   /** HISTORY — the client has no orders yet. */
   historyEmpty:
     'У вас поки немає замовлень. Натисніть «🚰 Замовити воду», щоб оформити перше.',
@@ -207,11 +255,25 @@ export const texts = {
     );
   },
 
-  /** CONTACTS — support phone (SPEC §6, "Contact us"; §11 — placeholder). */
-  contacts(phone: string): string {
+  /** "📍 Моя адреса" — the saved default address (with a change button). */
+  addressView(address: Address): string {
+    const comment = address.comment ? `\n📝 ${address.comment}` : '';
+    return `📍 Ваша адреса доставки:\n${address.raw}${comment}`;
+  },
+
+  /** Confirmation after the client saved/changed the address standalone. */
+  addressSaved: 'Адресу збережено ✅',
+
+  /**
+   * CONTACTS — support phones (SPEC §6, "Contact us"). Dispatcher-managed; one per line
+   * with a 📱 marker (Telegram keeps the numbers tap-to-call). Blank line after the
+   * header for scannability (UX P6).
+   */
+  contacts(phones: string[]): string {
+    const list = phones.map((p) => `📱 ${p}`).join('\n');
     return (
-      '📞 Зв’язатися з нами:\n' +
-      `${phone}\n\n` +
+      '📞 Зв’язатися з нами\n\n' +
+      `${list}\n\n` +
       'Телефонуйте, якщо потрібна допомога із замовленням або є запитання.'
     );
   },

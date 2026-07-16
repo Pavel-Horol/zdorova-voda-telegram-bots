@@ -16,6 +16,8 @@ export enum Step {
   ChooseQty = 'CHOOSE_QTY',
   Confirm = 'CONFIRM',
   EditMenu = 'EDIT_MENU',
+  /** Awaiting the optional client note about this order (from Confirm). */
+  AwaitOrderNote = 'AWAIT_ORDER_NOTE',
 }
 
 /**
@@ -51,6 +53,16 @@ export function parseTaraCount(raw: string): number | null {
   if (!Number.isInteger(n) || n < 1) return null;
   if (n > MAX_ORDER_QTY) return null;
   return n;
+}
+
+/**
+ * Parses the own-bottles count choice from `callback_data` (`tara:<n>|more`). A digit
+ * button gives the count (validated like {@link parseTaraCount}); `more` means the
+ * client wants to type an arbitrary number. Untrusted input → null.
+ */
+export function parseTaraChoice(raw: string): number | 'more' | null {
+  if (raw === 'more') return 'more';
+  return parseTaraCount(raw);
 }
 
 /** Pump choice in the starter kit (STEP3 T5). */

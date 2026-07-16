@@ -120,6 +120,16 @@ describe('PricingService.calculateTotal', () => {
     });
   });
 
+  describe('waterUnitPrice — grid tier boundaries', () => {
+    it('1 → price1, 2..5 → priceFrom2, ≥6 → priceFrom6', () => {
+      expect(service.waterUnitPrice(1, prices)).toBe(80);
+      expect(service.waterUnitPrice(2, prices)).toBe(70);
+      expect(service.waterUnitPrice(5, prices)).toBe(70);
+      expect(service.waterUnitPrice(6, prices)).toBe(65); // boundary: 6 is the from-6 tier
+      expect(service.waterUnitPrice(10, prices)).toBe(65);
+    });
+  });
+
   describe('edge cases', () => {
     it('throws on 0 bottles', () => {
       expect(() => service.calculateTotal(0, 'REPEAT', prices)).toThrow();
@@ -132,6 +142,23 @@ describe('PricingService.calculateTotal', () => {
 
     it('throws on a fractional quantity', () => {
       expect(() => service.calculateTotal(1.5, 'REPEAT', prices)).toThrow();
+    });
+
+    it('throws on an unknown order kind (defensive default branch)', () => {
+      expect(() =>
+        service.calculateTotal(1, 'BOGUS' as unknown as 'REPEAT', prices),
+      ).toThrow(/unknown order kind/);
+    });
+
+    it('newTara returns 0 for an unknown kind (defensive default branch)', () => {
+      expect(service.newTara(3, 'BOGUS' as unknown as 'REPEAT', 0)).toBe(0);
+    });
+
+    it('OWN_TARA with bottlesOnHand defaulting to 0 → the whole order is new tara', () => {
+      // default bottlesOnHand=0: order of 2 own-tara bottles is all under deposit.
+      expect(service.calculateTotal(2, 'OWN_TARA', prices)).toBe(
+        2 * 70 + 2 * 450,
+      );
     });
   });
 });

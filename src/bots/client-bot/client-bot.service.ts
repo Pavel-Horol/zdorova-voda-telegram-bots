@@ -17,9 +17,14 @@ import { OnEvent } from '@nestjs/event-emitter';
 import { ClientsService } from '../../modules/clients/clients.service';
 import { OrdersService } from '../../modules/orders/orders.service';
 import { PricingSettingsService } from '../../modules/pricing-settings/pricing-settings.service';
+import { ContactsService } from '../../modules/contacts/contacts.service';
 import {
   ORDER_STATUS_CHANGED,
+  ORDER_EDITED,
+  ORDER_DELIVERY_NOTE,
   type OrderStatusChangedEvent,
+  type OrderEditedEvent,
+  type OrderDeliveryNoteEvent,
 } from '../../modules/orders/order-events';
 import type { Address, Client, Order } from '../../../generated/prisma/client';
 import { OrderStatus } from '../../../generated/prisma/enums';
@@ -31,6 +36,7 @@ import {
   parsePumpChoice,
   parseQty,
   parseTaraCount,
+  parseTaraChoice,
   parseYesNo,
   resolveAfterQty,
   resolveBack,
@@ -52,6 +58,7 @@ const ORDER_FLOW_STEPS: readonly Step[] = [
   Step.ChooseQty,
   Step.Confirm,
   Step.EditMenu,
+  Step.AwaitOrderNote,
 ];
 
 interface SessionData {
@@ -80,11 +87,23 @@ interface SessionData {
   /** Pump add-on for own bottles (T5, answer "no pump"). */
   pumpAddon?: boolean;
   /**
+   * Optional client note about this order ("➕ Коментар до замовлення" on Confirm),
+   * e.g. an availability window. Carried until the order is created; distinct from the
+   * address comment (a permanent hint about the point). Cleared on resetSession.
+   */
+  orderNote?: string;
+  /**
    * Edit mode: the client opened "✏️ Змінити" on Confirm and is changing a single
    * field. While true, field-input handlers return to Confirm instead of continuing
    * the linear flow. Cleared on reaching Confirm (renderConfirm) and on resetSession.
    */
   editing?: boolean;
+  /**
+   * Standalone address management ("📍 Моя адреса" menu, not an order): the
+   * address/comment steps save the default address and return to the menu instead of
+   * continuing to quantity selection. Cleared on resetSession.
+   */
+  managingAddress?: boolean;
   /**
    * message_id of the last sent inline scenario screen. On any transition away
    * from it we strip the keyboard so no "dead" buttons hang in the chat (tapping
@@ -102,11 +121,15 @@ const CB_CANCEL = 'nav:cancel';
 const CB_SKIP = 'nav:skip';
 const CB_EDIT = 'nav:edit';
 const CB_EDIT_BACK = 'nav:editback';
+const CB_NOTE_ADD = 'note:add';
+const CB_NOTE_BACK = 'note:back';
+const CB_NOTE_CLEAR = 'note:clear';
 
 // Reply button labels of the main menu (also the keys of the text router).
 const BTN_ORDER = '🚰 Замовити воду';
 const BTN_HISTORY = '📋 Мої замовлення';
 const BTN_PRICES = '💰 Ціни';
+const BTN_ADDRESS = '📍 Моя адреса';
 const BTN_CONTACTS = '📞 Зв’язатися';
 
 /** Max bottles via buttons (3+ still goes at the same price, SPEC §3.1). */
@@ -124,6 +147,7 @@ const mainReplyKeyboard = new Keyboard()
   .text(BTN_HISTORY)
   .text(BTN_PRICES)
   .row()
+  .text(BTN_ADDRESS)
   .text(BTN_CONTACTS)
   .resized()
   .persistent();
@@ -156,7 +180,7 @@ function buildHistoryKeyboard(orders: Order[]): InlineKeyboard | undefined {
   if (!cancellable.length) return undefined;
   const kb = new InlineKeyboard();
   for (const o of cancellable) {
-    kb.text(`❌ Скасувати #${o.id.slice(0, 8)}`, `ocancel:${o.id}`).row();
+    kb.text(texts.cancelOrderButton(o), `ocancel:${o.id}`).row();
   }
   return kb;
 }
@@ -164,17 +188,42 @@ function buildHistoryKeyboard(orders: Order[]): InlineKeyboard | undefined {
 /** Under the address prompt — only "Cancel" (from the first step, "back" = exit). */
 const addressKeyboard = new InlineKeyboard().text('❌ Скасувати', CB_CANCEL);
 
+/** Under "📍 Моя адреса": change the saved address (standalone, returns to the menu). */
+const addressViewKeyboard = new InlineKeyboard().text(
+  '✏️ Змінити адресу',
+  'addr:edit',
+);
+
 /** Under the address comment prompt: skip (comment is optional) / cancel. */
 const commentKeyboard = new InlineKeyboard()
   .text('⏭ Пропустити', CB_SKIP)
   .text('❌ Скасувати', CB_CANCEL);
 
-/** Order confirmation: confirm / edit (opens the edit menu) / cancel (SPEC §6). */
-const confirmKeyboard = new InlineKeyboard()
-  .text('✅ Усе вірно, замовляю', CB_CONFIRM_YES)
-  .row()
-  .text('✏️ Змінити', CB_EDIT)
-  .text('❌ Скасувати', CB_CANCEL);
+/**
+ * Order confirmation: confirm / edit / cancel + an order-note row (SPEC §6). The note
+ * button label reflects whether a note is already set (add vs change), so the client
+ * sees their note is saved without re-reading the whole screen.
+ */
+function buildConfirmKeyboard(hasNote: boolean): InlineKeyboard {
+  return new InlineKeyboard()
+    .text('✅ Усе вірно, замовляю', CB_CONFIRM_YES)
+    .row()
+    .text(
+      hasNote ? '📝 Коментар до замовлення ✅' : '➕ Коментар до замовлення',
+      CB_NOTE_ADD,
+    )
+    .row()
+    .text('✏️ Змінити', CB_EDIT)
+    .text('❌ Скасувати', CB_CANCEL);
+}
+
+/** Under the order-note prompt: back to Confirm, and clear the note if one is set. */
+function buildOrderNoteKeyboard(hasNote: boolean): InlineKeyboard {
+  const kb = new InlineKeyboard();
+  if (hasNote) kb.text('🗑 Прибрати коментар', CB_NOTE_CLEAR).row();
+  kb.text('◀ Назад', CB_NOTE_BACK);
+  return kb;
+}
 
 /**
  * Edit menu (from "✏️ Змінити" on Confirm): pick the field to change. After editing,
@@ -204,8 +253,23 @@ const onboardingKeyboard = new InlineKeyboard()
   .row()
   .text('❌ Скасувати', CB_CANCEL);
 
-/** Under the own-bottles count input (OWN_TARA) — only cancel. */
+/** Under the manual own-bottles count input (OWN_TARA, "Інша кількість") — only cancel. */
 const ownTaraKeyboard = new InlineKeyboard().text('❌ Скасувати', CB_CANCEL);
+
+/**
+ * Own-bottles count selection (OWN_TARA): digits 1..MAX_QTY as buttons + "Інша
+ * кількість" for a larger number (typed as text) + cancel. Buttons by default keep the
+ * non-advanced audience off free text (UX P1/A3); the manual path stays for 6+ bottles.
+ */
+function buildOwnTaraKeyboard(): InlineKeyboard {
+  const kb = new InlineKeyboard();
+  for (let n = 1; n <= MAX_QTY; n += 1) {
+    kb.text(String(n), `tara:${n}`);
+  }
+  kb.row().text('✏️ Інша кількість', 'tara:more');
+  kb.row().text('❌ Скасувати', CB_CANCEL);
+  return kb;
+}
 
 /** Pump choice in the starter kit: standard / electric (T5). */
 const pumpChoiceKeyboard = new InlineKeyboard()
@@ -240,6 +304,7 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
     private readonly clients: ClientsService,
     private readonly orders: OrdersService,
     private readonly pricingSettings: PricingSettingsService,
+    private readonly contacts: ContactsService,
   ) {}
 
   onModuleInit(): void {
@@ -294,23 +359,67 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+  /**
+   * Notifies the client that the dispatcher edited their order (quantity / address /
+   * comment). Same fire-and-forget contract as {@link onOrderStatusChanged}: any send
+   * failure is logged, never rethrown (CLAUDE.md rule 9/10).
+   */
+  @OnEvent(ORDER_EDITED)
+  async onOrderEdited(event: OrderEditedEvent): Promise<void> {
+    if (!this.bot) return;
+    const text = texts.orderEdited(event.order);
+    try {
+      const client = await this.clients.getById(event.order.clientId);
+      if (!client) return;
+      await this.bot.api.sendMessage(String(client.telegramId), text);
+    } catch (err) {
+      this.logger.warn(
+        `failed to notify client about edited order ${event.order.id}: ${(err as Error).message}`,
+      );
+    }
+  }
+
+  /**
+   * Notifies the client about the delivery-timing message the dispatcher set for their
+   * order (🕒 "сьогодні" / "перенесено на завтра" / …). Same fire-and-forget contract
+   * as {@link onOrderStatusChanged}. A blank note yields no text — nothing is sent.
+   */
+  @OnEvent(ORDER_DELIVERY_NOTE)
+  async onOrderDeliveryNote(event: OrderDeliveryNoteEvent): Promise<void> {
+    if (!this.bot) return;
+    const text = texts.deliveryNoteUpdate(event.order);
+    if (!text) return;
+    try {
+      const client = await this.clients.getById(event.order.clientId);
+      if (!client) return;
+      await this.bot.api.sendMessage(String(client.telegramId), text);
+    } catch (err) {
+      this.logger.warn(
+        `failed to notify client about delivery note for order ${event.order.id}: ${(err as Error).message}`,
+      );
+    }
+  }
+
   private registerHandlers(bot: Bot<BotContext>): void {
     bot.command('start', (ctx) => this.onStart(ctx));
-    // TEMP self-delete (test only) — remove this line and onDeleteMyself below.
-    bot.command('deletemyself', (ctx) => this.onDeleteMyself(ctx));
     bot.on('message:contact', (ctx) => this.onContact(ctx));
     bot.callbackQuery(/^ob:(kit|own|other)$/, (ctx) =>
       this.onOnboardingChoice(ctx),
     );
     bot.callbackQuery(/^pump:(std|electro)$/, (ctx) => this.onPumpChoice(ctx));
+    bot.callbackQuery(/^tara:(\d+|more)$/, (ctx) => this.onOwnTaraChoice(ctx));
     bot.callbackQuery(/^yn:(yes|no)$/, (ctx) => this.onOwnPumpAnswer(ctx));
     bot.callbackQuery(/^qty:([1-9]\d*)$/, (ctx) => this.onChooseQty(ctx));
     bot.callbackQuery(CB_CONFIRM_YES, (ctx) => this.onConfirmYes(ctx));
     bot.callbackQuery(CB_EDIT, (ctx) => this.onEdit(ctx));
     bot.callbackQuery(CB_EDIT_BACK, (ctx) => this.onEditBack(ctx));
+    bot.callbackQuery(CB_NOTE_ADD, (ctx) => this.onAddOrderNote(ctx));
+    bot.callbackQuery(CB_NOTE_BACK, (ctx) => this.onOrderNoteBack(ctx));
+    bot.callbackQuery(CB_NOTE_CLEAR, (ctx) => this.onOrderNoteClear(ctx));
     bot.callbackQuery(/^ed:(qty|addr|comment|pump)$/, (ctx) =>
       this.onEditChoice(ctx),
     );
+    bot.callbackQuery('addr:edit', (ctx) => this.onManageAddressStart(ctx));
     bot.callbackQuery(CB_BACK, (ctx) => this.onBack(ctx));
     bot.callbackQuery(CB_CANCEL, (ctx) => this.onCancel(ctx));
     bot.callbackQuery(CB_SKIP, (ctx) => this.onSkipComment(ctx));
@@ -333,27 +442,6 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
     }
     await this.showMainMenu(ctx, client.name);
   }
-
-  // TEMP self-delete (test only) — remove this whole method when done.
-  private async onDeleteMyself(ctx: BotContext): Promise<void> {
-    if (!ctx.from) return;
-    try {
-      const deleted = await this.clients.deleteByTelegramId(
-        BigInt(ctx.from.id),
-      );
-      this.resetSession(ctx, Step.AwaitContact);
-      await this.replyMenu(
-        ctx,
-        deleted
-          ? 'Тебя удалено з бази. /start — почати заново.'
-          : 'Тебе немає в базі.',
-        contactKeyboard,
-      );
-    } catch {
-      await ctx.reply('Не вдалося видалити. Спробуй ще раз.');
-    }
-  }
-  // END TEMP
 
   /** Contact received: register the client and show the menu (AWAIT_CONTACT). */
   private async onContact(ctx: BotContext): Promise<void> {
@@ -413,6 +501,9 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
       case BTN_PRICES:
         await this.showPrices(ctx);
         return;
+      case BTN_ADDRESS:
+        await this.showAddress(ctx);
+        return;
       case BTN_CONTACTS:
         await this.showContacts(ctx);
         return;
@@ -426,6 +517,8 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
       await this.finalizeAddress(ctx, text);
     } else if (ctx.session.step === Step.OwnTaraCount) {
       await this.onOwnTaraCountInput(ctx, text);
+    } else if (ctx.session.step === Step.AwaitOrderNote) {
+      await this.onOrderNoteInput(ctx, text);
     }
   }
 
@@ -439,7 +532,8 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
     if (
       step === Step.AwaitAddress ||
       step === Step.AwaitComment ||
-      step === Step.OwnTaraCount
+      step === Step.OwnTaraCount ||
+      step === Step.AwaitOrderNote
     ) {
       await ctx.reply(texts.sendAsText);
     }
@@ -451,7 +545,8 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
     if (!client) return;
     if (ctx.session.editing) {
       // Edit mode: update only the address (keep the existing comment) and go back
-      // to Confirm — no second pass through the comment step.
+      // to Confirm — no second pass through the comment step. On a raw change
+      // setDefaultAddress drops a now-stale dispatcher pin (it pointed at the old place).
       const addr = await this.clients.getDefaultAddress(client.id);
       await this.clients.setDefaultAddress(client.id, {
         raw,
@@ -493,6 +588,19 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
         });
       }
       await this.returnToConfirm(ctx);
+      return;
+    }
+    if (ctx.session.managingAddress) {
+      // Standalone address management ("📍 Моя адреса"): save the default address and
+      // return to the menu (no quantity step). A shared pin (session geo) is written too.
+      const raw = ctx.session.addressRaw;
+      if (!raw) {
+        await this.renderAddressPrompt(ctx);
+        return;
+      }
+      await this.clients.setDefaultAddress(client.id, { raw, comment });
+      this.resetSession(ctx, Step.MainMenu);
+      await this.replyMenu(ctx, texts.addressSaved);
       return;
     }
     const raw = ctx.session.addressRaw;
@@ -574,9 +682,8 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
         return;
       case 'other': {
         // Non-standard — handled by the dispatcher (by call). Notify the dispatcher
-        // to call back; best-effort: the client gets the support phone either way (§8).
-        const phone =
-          this.config.get<string>('SUPPORT_PHONE') ?? '(телефон уточнюється)';
+        // to call back; best-effort: the client gets a support phone either way (§8).
+        const phone = (await this.supportPhones())[0] ?? '';
         this.resetSession(ctx, Step.MainMenu);
         try {
           await this.orders.requestCallback(client.id);
@@ -592,10 +699,28 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * Own-bottles count input (OWN_TARA, step OwnTaraCount). The declared count is kept
-   * in the session (NOT written to the client yet — deferred commit) and makes the
-   * order OWN_TARA; it is committed to the client's balance only when the dispatcher
-   * accepts the order. Then we always ask about the pump (we no longer assume one).
+   * Own-bottles count via buttons (OWN_TARA, step OwnTaraCount). A digit sets the count;
+   * "Інша кількість" switches to manual text entry (for 6+ bottles). See
+   * {@link onOwnTaraCountInput} for how the declared count is treated (deferred commit).
+   */
+  private async onOwnTaraChoice(ctx: BotContext): Promise<void> {
+    await ctx.answerCallbackQuery();
+    if (ctx.session.step !== Step.OwnTaraCount) return;
+    const choice = parseTaraChoice(ctx.match?.[1] ?? '');
+    if (choice === null) return;
+    if (choice === 'more') {
+      await this.renderOwnTaraManual(ctx);
+      return;
+    }
+    ctx.session.claimedOnHand = choice;
+    await this.renderOwnPumpAsk(ctx);
+  }
+
+  /**
+   * Own-bottles count typed as text (OWN_TARA, step OwnTaraCount, "Інша кількість" path).
+   * The declared count is kept in the session (NOT written to the client yet — deferred
+   * commit) and makes the order OWN_TARA; it is committed to the client's balance only
+   * when the dispatcher accepts the order. Then we always ask about the pump.
    */
   private async onOwnTaraCountInput(
     ctx: BotContext,
@@ -664,18 +789,19 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
       await ctx.answerCallbackQuery();
       return;
     }
+    let toast: string;
     try {
       await this.orders.cancelOwnOrder(orderId, client.id);
+      toast = 'Замовлення скасовано';
     } catch {
       // Already accepted/delivered/foreign — cannot be cancelled.
-      await ctx.answerCallbackQuery({
-        text: 'Це замовлення вже не можна скасувати',
-      });
-      return;
+      toast = 'Це замовлення вже не можна скасувати';
     }
-    await ctx.answerCallbackQuery({ text: 'Замовлення скасовано' });
+    await ctx.answerCallbackQuery({ text: toast });
 
-    // Redraw the list in place to reflect the current statuses and buttons.
+    // Redraw the list in place either way (UX A1 — no dead ends): on success it drops
+    // the cancelled order's button; on failure it refreshes now-stale buttons so the
+    // client is not left tapping one that keeps failing.
     const orders = await this.orders.listByClient(client.id);
     const text = orders.length ? texts.history(orders) : texts.historyEmpty;
     const kb = buildHistoryKeyboard(orders);
@@ -683,7 +809,7 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
       await ctx.editMessageText(text, kb ? { reply_markup: kb } : undefined);
       if (!kb) ctx.session.activeInlineMessageId = undefined;
     } catch {
-      // Message too old to edit — the client already saw the "cancelled" toast.
+      // Message too old to edit — the client already saw the toast.
     }
   }
 
@@ -697,15 +823,59 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
     await this.replyMenu(ctx, texts.prices(prices));
   }
 
-  /** "Contact us": support phone from config (SPEC §6, §11). */
+  /** "Contact us": dispatcher-managed active phones, env SUPPORT_PHONE as fallback. */
   private async showContacts(ctx: BotContext): Promise<void> {
     const client = await this.requireClient(ctx);
     if (!client) return;
     this.leaveOrderFlow(ctx);
 
-    const phone =
-      this.config.get<string>('SUPPORT_PHONE') ?? '(телефон уточнюється)';
-    await this.replyMenu(ctx, texts.contacts(phone));
+    await this.replyMenu(ctx, texts.contacts(await this.supportPhones()));
+  }
+
+  /**
+   * Support phones to show the client: the dispatcher-managed active list, else the env
+   * SUPPORT_PHONE fallback (validated fatal at startup, so never a placeholder/empty in
+   * production — the "Contact us" screen is never a dead end, UX P2).
+   */
+  private async supportPhones(): Promise<string[]> {
+    const active = await this.contacts.listActive();
+    if (active.length) return active.map((c) => c.phone);
+    const fallback = this.config.get<string>('SUPPORT_PHONE')?.trim();
+    return fallback ? [fallback] : [];
+  }
+
+  /**
+   * "📍 Моя адреса": show the saved default address (with a change button). No saved
+   * address yet → go straight into entering one. Interrupts an active order (global nav).
+   */
+  private async showAddress(ctx: BotContext): Promise<void> {
+    const client = await this.requireClient(ctx);
+    if (!client) return;
+    this.leaveOrderFlow(ctx);
+
+    const address = await this.clients.getDefaultAddress(client.id);
+    if (!address) {
+      // Nothing saved — start collecting it (standalone, returns to the menu).
+      ctx.session.managingAddress = true;
+      ctx.session.history = [Step.MainMenu];
+      await this.renderAddressPrompt(ctx);
+      return;
+    }
+    await this.replyInline(
+      ctx,
+      texts.addressView(address),
+      addressViewKeyboard,
+    );
+  }
+
+  /** "✏️ Змінити адресу": enter standalone address editing (returns to the menu). */
+  private async onManageAddressStart(ctx: BotContext): Promise<void> {
+    await ctx.answerCallbackQuery();
+    const client = await this.requireClient(ctx);
+    if (!client) return;
+    ctx.session.managingAddress = true;
+    ctx.session.history = [Step.MainMenu];
+    await this.renderAddressPrompt(ctx);
   }
 
   /** Quantity chosen: compute the price preview and show the confirmation. */
@@ -746,11 +916,12 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
       pumpAddon: ctx.session.pumpAddon,
       claimedOnHand: ctx.session.claimedOnHand,
     };
+    const note = ctx.session.orderNote;
     // Leave Confirm BEFORE creating the order — a repeat tap won't create a dupe.
     this.resetSession(ctx, Step.MainMenu);
 
     try {
-      await this.orders.createOrder(client.id, bottles, pumpOpts);
+      await this.orders.createOrder(client.id, bottles, pumpOpts, note);
     } catch (err) {
       // Creation failure (DB/race) — don't stay silent: the client must understand
       // the order was not placed and retry (quantity already reset — they re-order).
@@ -823,6 +994,37 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
       return;
     }
     await this.renderConfirm(ctx, client.id, address);
+  }
+
+  /**
+   * "➕ Коментар до замовлення" on Confirm: open the note prompt. A side-branch off
+   * Confirm (like the edit menu) — the text handler saves the note and returns here.
+   */
+  private async onAddOrderNote(ctx: BotContext): Promise<void> {
+    await ctx.answerCallbackQuery();
+    if (ctx.session.step !== Step.Confirm) return;
+    await this.renderOrderNotePrompt(ctx);
+  }
+
+  /** Order-note text entered (AWAIT_ORDER_NOTE): save it and return to Confirm. */
+  private async onOrderNoteInput(ctx: BotContext, text: string): Promise<void> {
+    ctx.session.orderNote = text;
+    await this.returnToConfirm(ctx);
+  }
+
+  /** "◀ Назад" under the note prompt: return to Confirm without changing the note. */
+  private async onOrderNoteBack(ctx: BotContext): Promise<void> {
+    await ctx.answerCallbackQuery();
+    if (ctx.session.step !== Step.AwaitOrderNote) return;
+    await this.returnToConfirm(ctx);
+  }
+
+  /** "🗑 Прибрати коментар" under the note prompt: clear the note and return to Confirm. */
+  private async onOrderNoteClear(ctx: BotContext): Promise<void> {
+    await ctx.answerCallbackQuery();
+    if (ctx.session.step !== Step.AwaitOrderNote) return;
+    ctx.session.orderNote = undefined;
+    await this.returnToConfirm(ctx);
   }
 
   /** "Back" on the quantity screen: one step back along the history stack. */
@@ -934,7 +1136,14 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
     await this.replyInline(ctx, texts.onboarding, onboardingKeyboard);
   }
 
+  /** Own-bottles count — button screen (default). */
   private async renderOwnTaraCount(ctx: BotContext): Promise<void> {
+    ctx.session.step = Step.OwnTaraCount;
+    await this.replyInline(ctx, texts.ownTaraChoose, buildOwnTaraKeyboard());
+  }
+
+  /** Own-bottles count — manual text entry ("Інша кількість"); same step, cancel only. */
+  private async renderOwnTaraManual(ctx: BotContext): Promise<void> {
     ctx.session.step = Step.OwnTaraCount;
     await this.replyInline(ctx, texts.ownTaraCount, ownTaraKeyboard);
   }
@@ -957,7 +1166,11 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
 
   private async renderAddressPrompt(ctx: BotContext): Promise<void> {
     ctx.session.step = Step.AwaitAddress;
-    await this.replyInline(ctx, texts.awaitAddress, addressKeyboard);
+    // "First order" wording only for a genuine first address; changing an existing one
+    // (standalone management or editing on Confirm) uses neutral copy.
+    const changing = ctx.session.managingAddress || ctx.session.editing;
+    const prompt = changing ? texts.changeAddress : texts.awaitAddress;
+    await this.replyInline(ctx, prompt, addressKeyboard);
   }
 
   private async renderCommentPrompt(ctx: BotContext): Promise<void> {
@@ -985,6 +1198,15 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
     );
   }
 
+  private async renderOrderNotePrompt(ctx: BotContext): Promise<void> {
+    ctx.session.step = Step.AwaitOrderNote;
+    await this.replyInline(
+      ctx,
+      texts.orderNotePrompt,
+      buildOrderNoteKeyboard(!!ctx.session.orderNote),
+    );
+  }
+
   private async renderConfirm(
     ctx: BotContext,
     clientId: string,
@@ -1003,7 +1225,11 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
     // Reaching Confirm ends any single-field edit (covers the edit-quantity path too).
     ctx.session.editing = false;
     ctx.session.step = Step.Confirm;
-    await this.replyInline(ctx, texts.confirm(quote, address), confirmKeyboard);
+    await this.replyInline(
+      ctx,
+      texts.confirm(quote, address, ctx.session.orderNote),
+      buildConfirmKeyboard(!!ctx.session.orderNote),
+    );
   }
 
   // --- Sending screens with cleanup of hanging inline buttons ----------------
@@ -1064,7 +1290,9 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
     ctx.session.claimedOnHand = undefined;
     ctx.session.electro = undefined;
     ctx.session.pumpAddon = undefined;
+    ctx.session.orderNote = undefined;
     ctx.session.editing = undefined;
+    ctx.session.managingAddress = undefined;
     ctx.session.history = [];
   }
 

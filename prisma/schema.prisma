@@ -9,6 +9,11 @@ generator client {
   // Without this the new Prisma 7 generator emits ESM sources with import.meta.url,
   // which break at runtime under Node ("exports is not defined in ES module scope").
   moduleFormat = "cjs"
+  // Import extension inside the generated client. Auto-detected from tsconfig, but that
+  // detection needs tsconfig present at generate time (e.g. in Docker `prisma generate`
+  // can run before tsconfig is copied). Pinning "js" makes compiled dist require ./x.js —
+  // without it the generator may emit require("./internal/class.ts") → runtime MODULE_NOT_FOUND.
+  importFileExtension = "js"
 }
 
 datasource db {
@@ -58,6 +63,11 @@ model Address {
   raw       String
   comment   String?
   isDefault Boolean  @default(false)
+  /// Delivery coordinates for future route optimization. The client enters the
+  /// address as free text; the dispatcher attaches the point on demand (Telegram
+  /// location pin on mobile, or a pasted coords / maps link). Null until tagged.
+  lat       Float?
+  lng       Float?
   createdAt DateTime @default(now())
 
   client Client  @relation(fields: [clientId], references: [id], onDelete: Cascade)
@@ -87,9 +97,21 @@ model Order {
   /// (deferred commit / verification — PRODUCT.md). Also drives the dispatcher "verify
   /// N bottles" mark.
   claimedOnHand Int?
+  /// Client note about THIS order (entered at ordering, optional): one-off info for
+  /// the dispatcher/driver, e.g. "мене не буде з 14 до 16". Distinct from
+  /// Address.comment (a permanent hint about the delivery point, reused across orders).
+  note         String?
+  /// Last delivery-timing message the dispatcher sent the client about this order
+  /// (e.g. "сьогодні", "перенесено на завтра"). Updatable; each change pushes the
+  /// client and is echoed on the dispatcher card. Null until the dispatcher sets one.
+  deliveryNote String?
   /// Frozen order total in UAH (integer, no kopecks).
   totalPrice   Int
   status       OrderStatus @default(CREATED)
+  /// Why the dispatcher cancelled (optional): a preset phrase or free text. Shown on
+  /// the cancelled card; cleared when the cancel is undone (revertCancellation). Null
+  /// when the order is not cancelled, or was cancelled without a stated reason.
+  cancelReason String?
   createdAt    DateTime    @default(now())
   acceptedAt   DateTime?
   deliveredAt  DateTime?
@@ -102,6 +124,33 @@ model Order {
 
   @@index([clientId])
   @@index([status])
+}
+
+/// Support contact phone shown to the client on "Зв'язатися". Dispatcher-managed
+/// (add / hide / delete via the dispatcher bot). The client sees only `active` rows;
+/// if none are active, the SUPPORT_PHONE env fallback is shown, so the "Contact us"
+/// screen is never a dead end (UX P2). `active=false` keeps the number but hides it.
+model ContactPhone {
+  id        String   @id @default(uuid())
+  /// Normalized to `+<digits>` on input (see contacts.service).
+  phone     String   @unique
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+}
+
+/// A dispatcher chat allowed to run the dispatcher bot and receive order notifications.
+/// The super-admin chat (env DISPATCHER_CHAT_ID) is NOT stored here — it is always
+/// admitted and manages this list from the bot (/dispatchers). The allowed set is the
+/// union of that env id and the `active` rows here; `active=false` keeps the row but
+/// stops both admission and notifications. See dispatchers.service.
+model Dispatcher {
+  id        String   @id @default(uuid())
+  /// Telegram chat id as a string (may be negative for group chats). Unique.
+  chatId    String   @unique
+  /// Optional human label the super-admin typed (e.g. a name), for the management list.
+  label     String?
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
 }
 
 /// Price settings — a singleton (one row for the whole system).

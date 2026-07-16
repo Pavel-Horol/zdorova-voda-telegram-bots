@@ -10,7 +10,11 @@ import {
 } from '../../bots/shared/order-dispatcher';
 import {
   ORDER_STATUS_CHANGED,
+  ORDER_EDITED,
+  ORDER_DELIVERY_NOTE,
   type OrderStatusChangedEvent,
+  type OrderEditedEvent,
+  type OrderDeliveryNoteEvent,
 } from './order-events';
 import { OrderStatus, OrderKind } from '../../../generated/prisma/enums';
 import type { Order, Client, Address } from '../../../generated/prisma/client';
@@ -42,6 +46,28 @@ export interface OrderQuote {
   electro: boolean;
   /** Pump add-on for own bottles (for the confirmation text). */
   pumpAddon: boolean;
+}
+
+/**
+ * Grouped operator summary for the dispatcher's /stats (SPEC §7). Money and volume
+ * follow the "без скасованих" convention — CANCELLED orders count only under
+ * `cancellations`. Rendered by `statsMessage()` (dispatcher-bot.texts.ts).
+ */
+export interface StatsSummary {
+  /** Point-in-time queue: unhandled (CREATED) and in progress (ACCEPTED). */
+  queue: { created: number; accepted: number };
+  /** Today (from local midnight): order count, money and delivered bottles. */
+  today: { count: number; sum: number; bottles: number };
+  /** Rolling 7 days: order count, money and delivered bottles. */
+  week: { count: number; sum: number; bottles: number };
+  /** Rolling 30 days: order count and money. */
+  month: { count: number; sum: number };
+  /**
+   * Cancellations by period, plus the week cancel rate (cancelled / all week
+   * orders). `weekRate` is null when there were no week orders at all — the text
+   * renders «—» (guards divide-by-zero).
+   */
+  cancellations: { today: number; week: number; weekRate: number | null };
 }
 
 /** Order pump options (the client's onboarding choice). */
@@ -101,10 +127,37 @@ export class OrdersService {
     return last?.bottles ?? null;
   }
 
+  /**
+   * Water price per bottle by the current grid for a given quantity (for the driver
+   * hand-off line). Delegates to PricingService (the single source of truth) with the
+   * current PriceSettings — informational, so it uses live prices, not the frozen total.
+   */
+  async waterUnitPrice(bottles: number): Promise<number> {
+    const prices = await this.pricingSettings.getCurrent();
+    return this.pricing.waterUnitPrice(bottles, prices);
+  }
+
   /** Order with client and address — for redrawing the dispatcher's message (SPEC §7). */
   getOrderView(id: string): Promise<OrderWithRelations | null> {
     return this.prisma.order.findUnique({
       where: { id },
+      include: { client: true, address: true },
+    });
+  }
+
+  /**
+   * Read-only lookup by the short id shown on a card (`#a1b2c3d4`) — or a full uuid —
+   * for the dispatcher's /order command: after an order leaves the active list it can
+   * no longer be re-opened by button, only pulled up by id. The 8-char short id is the
+   * uuid's leading hex, so a `startsWith` prefix match finds it; a full uuid matches
+   * exactly. Loads the same relations as {@link getOrderView} so the card renders. The
+   * prefix is validated/normalized by the handler (normalizeOrderIdArg) — this expects a
+   * clean hex prefix. Returns ALL matches (a short prefix could, in theory, collide).
+   */
+  findByShortIdPrefix(prefix: string): Promise<OrderWithRelations[]> {
+    return this.prisma.order.findMany({
+      where: { id: { startsWith: prefix } },
+      orderBy: { createdAt: 'desc' },
       include: { client: true, address: true },
     });
   }
@@ -126,37 +179,107 @@ export class OrdersService {
   }
 
   /**
-   * Summary for /stats (SPEC §7): order count and total for today and the last 7
-   * days, without cancelled. "Today" — from local midnight, "week" — a rolling
-   * 7 days. Full analytics — a separate module later.
+   * Compact operator summary for /stats (SPEC §7). Everything follows the
+   * "без скасованих" convention — CANCELLED orders never count toward volume or
+   * money (only the dedicated cancellation figures count them). Periods: "today"
+   * from local midnight, "week" a rolling 7 days, "month" a rolling 30 days.
+   * "bottles" is the number of bottles actually DELIVERED in the period (a real
+   * volume signal, unlike created-but-pending orders). Full analytics — later.
    */
-  async stats(): Promise<{
-    today: { count: number; sum: number };
-    week: { count: number; sum: number };
-  }> {
+  async stats(): Promise<StatsSummary> {
     const startOfToday = new Date();
     startOfToday.setHours(0, 0, 0, 0);
     const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
-    const notCancelled = { status: { not: OrderStatus.CANCELLED } };
-    const todayWhere = { ...notCancelled, createdAt: { gte: startOfToday } };
-    const weekWhere = { ...notCancelled, createdAt: { gte: weekAgo } };
+    const monthAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
 
-    const [todayCount, todayAgg, weekCount, weekAgg] =
-      await this.prisma.$transaction([
-        this.prisma.order.count({ where: todayWhere }),
-        this.prisma.order.aggregate({
-          where: todayWhere,
-          _sum: { totalPrice: true },
-        }),
-        this.prisma.order.count({ where: weekWhere }),
-        this.prisma.order.aggregate({
-          where: weekWhere,
-          _sum: { totalPrice: true },
-        }),
-      ]);
+    const notCancelled = { status: { not: OrderStatus.CANCELLED } };
+    const delivered = { status: OrderStatus.DELIVERED };
+    const cancelled = { status: OrderStatus.CANCELLED };
+    const since = (from: Date) => ({ createdAt: { gte: from } });
+
+    const [
+      queueCreated,
+      queueAccepted,
+      todayCount,
+      todayAgg,
+      todayBottles,
+      weekCount,
+      weekAgg,
+      weekBottles,
+      monthCount,
+      monthAgg,
+      todayCancelled,
+      weekCancelled,
+    ] = await this.prisma.$transaction([
+      // Queue now: unhandled (CREATED) and in progress (ACCEPTED) — a point-in-time
+      // snapshot, so no period filter.
+      this.prisma.order.count({ where: { status: OrderStatus.CREATED } }),
+      this.prisma.order.count({ where: { status: OrderStatus.ACCEPTED } }),
+      // Today / week: order count + money (non-cancelled) and delivered bottles.
+      this.prisma.order.count({
+        where: { ...notCancelled, ...since(startOfToday) },
+      }),
+      this.prisma.order.aggregate({
+        where: { ...notCancelled, ...since(startOfToday) },
+        _sum: { totalPrice: true },
+      }),
+      this.prisma.order.aggregate({
+        where: { ...delivered, ...since(startOfToday) },
+        _sum: { bottles: true },
+      }),
+      this.prisma.order.count({
+        where: { ...notCancelled, ...since(weekAgo) },
+      }),
+      this.prisma.order.aggregate({
+        where: { ...notCancelled, ...since(weekAgo) },
+        _sum: { totalPrice: true },
+      }),
+      this.prisma.order.aggregate({
+        where: { ...delivered, ...since(weekAgo) },
+        _sum: { bottles: true },
+      }),
+      // This month: count + money (non-cancelled).
+      this.prisma.order.count({
+        where: { ...notCancelled, ...since(monthAgo) },
+      }),
+      this.prisma.order.aggregate({
+        where: { ...notCancelled, ...since(monthAgo) },
+        _sum: { totalPrice: true },
+      }),
+      // Cancellations: today + week.
+      this.prisma.order.count({
+        where: { ...cancelled, ...since(startOfToday) },
+      }),
+      this.prisma.order.count({
+        where: { ...cancelled, ...since(weekAgo) },
+      }),
+    ]);
+
+    const weekSum = weekAgg._sum.totalPrice ?? 0;
+    // Week cancel rate over all week orders (cancelled + non-cancelled). null when
+    // there were no orders at all — the text renders it as «—» (no divide-by-zero).
+    const weekTotalOrders = weekCount + weekCancelled;
+    const cancelRate =
+      weekTotalOrders > 0 ? weekCancelled / weekTotalOrders : null;
+
     return {
-      today: { count: todayCount, sum: todayAgg._sum.totalPrice ?? 0 },
-      week: { count: weekCount, sum: weekAgg._sum.totalPrice ?? 0 },
+      queue: { created: queueCreated, accepted: queueAccepted },
+      today: {
+        count: todayCount,
+        sum: todayAgg._sum.totalPrice ?? 0,
+        bottles: todayBottles._sum.bottles ?? 0,
+      },
+      week: {
+        count: weekCount,
+        sum: weekSum,
+        bottles: weekBottles._sum.bottles ?? 0,
+      },
+      month: { count: monthCount, sum: monthAgg._sum.totalPrice ?? 0 },
+      cancellations: {
+        today: todayCancelled,
+        week: weekCancelled,
+        weekRate: cancelRate,
+      },
     };
   }
 
@@ -169,6 +292,7 @@ export class OrdersService {
     clientId: string,
     bottles: number,
     opts: PumpOptions = {},
+    note?: string | null,
   ): Promise<Order> {
     const client = await this.clients.getById(clientId);
     if (!client) {
@@ -182,10 +306,7 @@ export class OrdersService {
 
     // A self-declared claim is meaningful only when positive; 0/negative means "no
     // bottles" (STARTER_KIT) and must never flag review or commit a zero balance.
-    const claimedOnHand =
-      opts.claimedOnHand != null && opts.claimedOnHand > 0
-        ? opts.claimedOnHand
-        : undefined;
+    const claimedOnHand = this.normalizeClaim(opts.claimedOnHand);
     const kind = await this.deriveKind(client, claimedOnHand);
     const prices = await this.pricingSettings.getCurrent();
     // For an OWN_TARA first order the balance is not committed yet (deferred commit) —
@@ -213,6 +334,9 @@ export class OrdersService {
         pumpAddon: opts.pumpAddon ?? false,
         // Self-declared balance to verify and commit on acceptance (OWN_TARA only).
         claimedOnHand: claimedOnHand ?? null,
+        // Optional client note about this order (e.g. availability window). Does not
+        // affect pricing — kept separate from the pump/tara opts.
+        note: note ?? null,
         totalPrice,
         status: OrderStatus.CREATED,
       },
@@ -255,12 +379,15 @@ export class OrdersService {
     opts: PumpOptions = {},
   ): Promise<OrderQuote> {
     const client = await this.clients.getById(clientId);
+    // Normalize identically to createOrder so the preview can never diverge from the
+    // charged total (0/negative claim → undefined, i.e. "no bottles").
+    const claimedOnHand = this.normalizeClaim(opts.claimedOnHand);
     const kind = client
-      ? await this.deriveKind(client, opts.claimedOnHand)
+      ? await this.deriveKind(client, claimedOnHand)
       : OrderKind.STARTER_KIT;
     // Mirror createOrder: an OWN_TARA claim is not committed yet, so quote off the
     // self-declared count; otherwise off the client's balance.
-    const bottlesOnHand = opts.claimedOnHand ?? client?.bottlesOnHand ?? 0;
+    const bottlesOnHand = claimedOnHand ?? client?.bottlesOnHand ?? 0;
     const prices = await this.pricingSettings.getCurrent();
     const totalPrice = this.pricing.calculateTotal(
       bottles,
@@ -321,9 +448,118 @@ export class OrdersService {
     // Editing is allowed only before delivery, so bottlesOnHand is still the
     // pre-delivery value — re-snapshot newTara for the new quantity.
     const newTara = this.pricing.newTara(bottles, order.kind, bottlesOnHand);
-    return this.prisma.order.update({
+    const updated = await this.prisma.order.update({
       where: { id: orderId },
       data: { bottles, newTara, totalPrice },
+      include: { client: true, address: true },
+    });
+    this.emitEdited(updated);
+    return updated;
+  }
+
+  /**
+   * Dispatcher edit of the delivery address TEXT of an active order (✏️ → 📍 Адресу).
+   * The text is stored on the shared Address (reused across the client's orders, like
+   * geo-tagging) — a typo fix propagates to the client's future orders too, which is
+   * the intended behaviour. Allowed only for created/accepted. Notifies the client.
+   */
+  async editOrderAddress(
+    orderId: string,
+    raw: string,
+  ): Promise<OrderWithRelations> {
+    const order = await this.requireEditableOrder(orderId);
+    await this.prisma.address.update({
+      where: { id: order.addressId },
+      data: { raw },
+    });
+    const updated = await this.prisma.order.findUniqueOrThrow({
+      where: { id: orderId },
+      include: { client: true, address: true },
+    });
+    this.emitEdited(updated);
+    return updated;
+  }
+
+  /**
+   * Dispatcher edit of the address COMMENT of an active order (✏️ → 📝 Коментар).
+   * Stored on the shared Address like {@link editOrderAddress}. Allowed only for
+   * created/accepted. Notifies the client.
+   */
+  async editOrderComment(
+    orderId: string,
+    comment: string,
+  ): Promise<OrderWithRelations> {
+    const order = await this.requireEditableOrder(orderId);
+    await this.prisma.address.update({
+      where: { id: order.addressId },
+      data: { comment },
+    });
+    const updated = await this.prisma.order.findUniqueOrThrow({
+      where: { id: orderId },
+      include: { client: true, address: true },
+    });
+    this.emitEdited(updated);
+    return updated;
+  }
+
+  /**
+   * Dispatcher sets/updates the delivery-timing message shown to the client (🕒):
+   * "сьогодні", "перенесено на завтра", "протягом години", … Stored on the order
+   * (last message wins) and pushed to the client via the delivery-note event. Allowed
+   * only while the order is active (created/accepted) — a delivered/cancelled order has
+   * no pending delivery to reschedule.
+   */
+  async setDeliveryNote(
+    orderId: string,
+    deliveryNote: string,
+  ): Promise<OrderWithRelations> {
+    await this.requireEditableOrder(orderId);
+    const updated = await this.prisma.order.update({
+      where: { id: orderId },
+      data: { deliveryNote },
+      include: { client: true, address: true },
+    });
+    this.emitDeliveryNote(updated);
+    return updated;
+  }
+
+  /**
+   * Loads an order and asserts it is still editable by the dispatcher (created/
+   * accepted — not delivered/cancelled). Shared guard for the content-edit methods.
+   */
+  private async requireEditableOrder(orderId: string): Promise<Order> {
+    const order = await this.prisma.order.findUniqueOrThrow({
+      where: { id: orderId },
+    });
+    if (
+      order.status !== OrderStatus.CREATED &&
+      order.status !== OrderStatus.ACCEPTED
+    ) {
+      throw new Error(`cannot edit order ${orderId} in status ${order.status}`);
+    }
+    return order;
+  }
+
+  /**
+   * Attaches delivery coordinates to an order's address (dispatcher geo-tagging, for
+   * future route optimization). The client enters the address as free text; the
+   * dispatcher pins the point on demand. Stored on the Address (reused across the
+   * client's orders), not on the Order. Returns the order view to redraw the card.
+   */
+  async setOrderAddressGeo(
+    orderId: string,
+    lat: number,
+    lng: number,
+  ): Promise<OrderWithRelations> {
+    const order = await this.prisma.order.findUniqueOrThrow({
+      where: { id: orderId },
+    });
+    await this.prisma.address.update({
+      where: { id: order.addressId },
+      data: { lat, lng },
+    });
+    return this.prisma.order.findUniqueOrThrow({
+      where: { id: orderId },
       include: { client: true, address: true },
     });
   }
@@ -443,8 +679,12 @@ export class OrdersService {
     }
   }
 
-  /** CREATED/ACCEPTED → CANCELLED. A delivered or already cancelled one — not allowed. */
-  async cancelOrder(id: string): Promise<Order> {
+  /**
+   * CREATED/ACCEPTED → CANCELLED. A delivered or already cancelled one — not allowed.
+   * `reason` (optional): why the dispatcher cancelled — a preset phrase or free text,
+   * stored on the order for the cancelled card. Omitted → no stated reason (null).
+   */
+  async cancelOrder(id: string, reason?: string): Promise<Order> {
     const order = await this.prisma.order.findUniqueOrThrow({ where: { id } });
     if (
       order.status !== OrderStatus.CREATED &&
@@ -454,10 +694,29 @@ export class OrdersService {
     }
     const cancelled = await this.prisma.order.update({
       where: { id },
-      data: { status: OrderStatus.CANCELLED },
+      data: { status: OrderStatus.CANCELLED, cancelReason: reason ?? null },
     });
     this.emitStatusChanged(cancelled);
     return cancelled;
+  }
+
+  /**
+   * CANCELLED → CREATED: undo a just-made dispatcher cancellation (mis-tap safety net,
+   * PRODUCT.md). Works ONLY while the order is still CANCELLED — an atomic guarded
+   * update (where includes status), like {@link cancelOrder}/{@link acceptOrder}, so a
+   * double undo or a race can't resurrect an order twice. Reverts to CREATED (the
+   * pre-accept active state); the dispatcher re-accepts if needed. No client push: a
+   * cancel-then-undo is a dispatcher correction the client should not see flip-flop.
+   */
+  async revertCancellation(id: string): Promise<Order> {
+    const order = await this.prisma.order.findUniqueOrThrow({ where: { id } });
+    if (order.status !== OrderStatus.CANCELLED) {
+      throw new Error(`cannot revert order ${id} in status ${order.status}`);
+    }
+    return this.prisma.order.update({
+      where: { id, status: OrderStatus.CANCELLED },
+      data: { status: OrderStatus.CREATED, cancelReason: null },
+    });
   }
 
   /**
@@ -468,6 +727,25 @@ export class OrdersService {
   private emitStatusChanged(order: Order): void {
     const payload: OrderStatusChangedEvent = { order };
     this.events.emit(ORDER_STATUS_CHANGED, payload);
+  }
+
+  /**
+   * Notifies subscribers that the dispatcher edited an order's content (quantity /
+   * address / comment) — the client bot tells the client. Fire-and-forget, like
+   * {@link emitStatusChanged}: the listener swallows its own errors.
+   */
+  private emitEdited(order: Order): void {
+    const payload: OrderEditedEvent = { order };
+    this.events.emit(ORDER_EDITED, payload);
+  }
+
+  /**
+   * Notifies subscribers that the dispatcher set a delivery-timing message for the
+   * client — the client bot pushes it. Fire-and-forget, like the other order events.
+   */
+  private emitDeliveryNote(order: Order): void {
+    const payload: OrderDeliveryNoteEvent = { order };
+    this.events.emit(ORDER_DELIVERY_NOTE, payload);
   }
 
   /**
@@ -517,6 +795,18 @@ export class OrdersService {
       where: { clientId, status: { not: OrderStatus.CANCELLED } },
     });
     return activeCount === 0;
+  }
+
+  /**
+   * Normalizes a self-declared bottle claim: only a positive count is a real OWN_TARA
+   * declaration; 0/negative/undefined all mean "no bottles" → undefined. Single source
+   * of truth shared by quote() and createOrder() so the preview and the charged total
+   * derive the kind and tara math from identical inputs (no divergence on edge values).
+   */
+  private normalizeClaim(claimedOnHand?: number): number | undefined {
+    return claimedOnHand != null && claimedOnHand > 0
+      ? claimedOnHand
+      : undefined;
   }
 
   /**
