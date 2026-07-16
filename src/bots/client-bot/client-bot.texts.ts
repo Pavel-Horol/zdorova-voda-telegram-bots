@@ -35,9 +35,32 @@ const STATUS_LABEL: Record<OrderStatus, string> = {
  * money and quantities arrive ready from OrderQuote (CLAUDE.md §1).
  */
 export const texts = {
-  /** AWAIT_CONTACT (SPEC §6). */
+  /**
+   * Bot profile: the "about" line in the profile card (Telegram limit — 120 chars).
+   * Synced at startup by ClientBotService, not edited by hand in BotFather.
+   */
+  botShortDescription:
+    '💧 «Здорова Вода» — доставка питної води 19 л додому та в офіс. ' +
+    'Замовлення за хвилину.',
+
+  /**
+   * Bot profile: the description shown in the empty chat before /start
+   * (Telegram limit — 512 chars). Synced at startup by ClientBotService.
+   */
+  botDescription:
+    'Вітаємо у «Здорова Вода»! 💧\n\n' +
+    'Доставляємо питну воду в бутлях 19 л додому та в офіс.\n\n' +
+    '🚰 Замовлення за кілька натискань\n' +
+    '🔄 Повтор минулого замовлення одним дотиком\n' +
+    '💰 Актуальні ціни завжди під рукою\n' +
+    '💵 Оплата готівкою водієві\n\n' +
+    'Натисніть «Розпочати», щоб оформити перше замовлення.',
+
+  /** AWAIT_CONTACT (SPEC §6) — greeting for a brand-new user after /start. */
   awaitContact:
-    'Вітаємо! 💧 Щоб оформити замовлення, поділіться номером телефону — ' +
+    'Вітаємо у «Здорова Вода»! 💧 Доставляємо питну воду (бутлі 19 л) ' +
+    'додому та в офіс.\n\n' +
+    'Щоб оформити замовлення, поділіться номером телефону — ' +
     'за ним ми визначимо вашу адресу доставки.',
 
   /** Main menu for an already known client (text above the reply keyboard). */

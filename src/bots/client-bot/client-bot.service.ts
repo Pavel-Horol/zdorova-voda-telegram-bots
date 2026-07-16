@@ -324,6 +324,10 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
     bot.catch((err) => this.logger.error(`client-bot error: ${err.message}`));
     this.bot = bot;
 
+    // Profile texts (description before /start, "about") — fire-and-forget:
+    // a Telegram hiccup here must not prevent the bot from starting.
+    void this.syncBotProfile(bot);
+
     // start() resolves only when the bot stops — do NOT await, or init would hang.
     void bot.start({
       onStart: (me) =>
@@ -333,6 +337,34 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
 
   async onModuleDestroy(): Promise<void> {
     await this.bot?.stop();
+  }
+
+  /**
+   * Syncs the bot profile with texts.ts: the description shown in the empty chat
+   * before /start and the short "about" line in the profile card. Kept in the repo
+   * (versioned, reviewable) instead of hand-edits in BotFather. Reads current
+   * values first and writes only on change — Telegram rate-limits these methods,
+   * and a routine restart must not burn that limit.
+   */
+  private async syncBotProfile(bot: Bot<BotContext>): Promise<void> {
+    try {
+      const [{ description }, { short_description }] = await Promise.all([
+        bot.api.getMyDescription(),
+        bot.api.getMyShortDescription(),
+      ]);
+      if (description !== texts.botDescription) {
+        await bot.api.setMyDescription(texts.botDescription);
+        this.logger.log('client-bot description updated');
+      }
+      if (short_description !== texts.botShortDescription) {
+        await bot.api.setMyShortDescription(texts.botShortDescription);
+        this.logger.log('client-bot short description updated');
+      }
+    } catch (e) {
+      this.logger.warn(
+        `client-bot profile sync failed: ${e instanceof Error ? e.message : String(e)}`,
+      );
+    }
   }
 
   /**

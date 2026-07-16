@@ -281,4 +281,16 @@ describe('client-bot texts', () => {
       expect(out).toContain('застава 450 грн/бак');
     });
   });
+
+  // Synced to Telegram at startup — an over-limit text would make the API call
+  // fail silently in the fire-and-forget sync, so the limits are pinned here.
+  describe('bot profile', () => {
+    it('short description fits the Telegram 120-char limit', () => {
+      expect(texts.botShortDescription.length).toBeLessThanOrEqual(120);
+    });
+
+    it('description fits the Telegram 512-char limit', () => {
+      expect(texts.botDescription.length).toBeLessThanOrEqual(512);
+    });
+  });
 });
