@@ -49,3 +49,39 @@ jobs:
 
       - name: Unit tests
         run: npm test
+
+  # CD: автовыкатка на VPS (DEPLOY.md §13). Запускается ТОЛЬКО после зелёного
+  # quality-gate и ТОЛЬКО на push в master — на PR и integration/** деплоя нет.
+  deploy:
+    name: deploy → prod VPS
+    needs: quality-gate
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    # Деплои строго по одному и НЕ отменяются на середине: прерванный
+    # `docker compose up --build` хуже, чем чуть устаревший — следующий пуш
+    # просто дождётся очереди и выкатит самое свежее.
+    concurrency:
+      group: deploy-prod
+      cancel-in-progress: false
+
+    steps:
+      - name: Set up SSH key
+        run: |
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "${{ secrets.SSH_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -H "${{ secrets.SSH_HOST }}" >> ~/.ssh/known_hosts
+
+      # Те же команды, что при ручной выкатке (DEPLOY.md §9), плюс:
+      # reset --hard вместо pull — прод-чекаут всегда точная копия origin/master
+      # (локальных правок на сервере быть не должно; .env не в git — его не тронет).
+      - name: Pull & rebuild on server
+        run: |
+          ssh "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}" /bin/bash << 'EOF'
+            set -euo pipefail
+            cd ~/zdorova-voda-telegram-bots
+            git fetch origin master
+            git reset --hard origin/master
+            docker compose -f docker-compose.prod.yml up -d --build
+            docker image prune -f
+          EOF

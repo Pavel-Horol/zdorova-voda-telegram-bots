@@ -45,12 +45,17 @@ rsync --archive --chown=deploy:deploy ~/.ssh /home/deploy   # перенести
 ## 4. Забираем код
 ```bash
 cd ~
-git clone https://github.com/ВАШ_ЮЗЕР/aqua-bot.git
-cd aqua-bot
+git clone git@github.com:Pavel-Horol/zdorova-voda-telegram-bots.git
+cd zdorova-voda-telegram-bots
 git checkout master             # или та ветка, которую деплоите
 ```
+> ⚠️ Каталог НЕ переименовывать: путь `~/zdorova-voda-telegram-bots` захардкожен в
+> job `deploy` (`.github/workflows/ci.yml`). Другое имя — и автовыкатка упадёт на `cd`.
+
 > Приватный репозиторий? Настрой [deploy key](https://docs.github.com/en/authentication/connecting-to-github-with-ssh)
-> или клонируй по HTTPS с Personal Access Token.
+> (ключ генерится на сервере, публичная часть — в Settings → Deploy keys, без write access).
+> Если ключ назван не дефолтно (`id_ed25519`), пропиши его в `~/.ssh/config` для
+> `Host github.com` — иначе ssh его не предложит и клон упадёт с `Permission denied (publickey)`.
 
 ## 5. Заполняем секреты
 ```bash
@@ -99,7 +104,7 @@ Telegram разрешает **один** polling-процесс на токен.
 
 ## 9. Обновление (выкатка нового кода)
 ```bash
-cd ~/aqua-bot
+cd ~/zdorova-voda-telegram-bots
 git pull
 docker compose -f docker-compose.prod.yml up -d --build
 ```
@@ -122,9 +127,10 @@ docker compose -f docker-compose.prod.yml up -d --build
 docker compose -f docker-compose.prod.yml exec db \
   pg_dump -U aqua aqua | gzip > ~/aqua-backup-$(date +%F).sql.gz
 ```
-Автобэкап раз в сутки через cron (`crontab -e`):
+Автобэкап раз в сутки через cron. Сначала создай каталог (иначе cron будет молча
+падать на редиректе): `mkdir -p /home/deploy/backups`. Затем `crontab -e`:
 ```
-0 3 * * * cd /home/deploy/aqua-bot && docker compose -f docker-compose.prod.yml exec -T db pg_dump -U aqua aqua | gzip > /home/deploy/backups/aqua-$(date +\%F).sql.gz
+0 3 * * * cd /home/deploy/zdorova-voda-telegram-bots && docker compose -f docker-compose.prod.yml exec -T db pg_dump -U aqua aqua | gzip > /home/deploy/backups/aqua-$(date +\%F).sql.gz
 ```
 Восстановление:
 ```bash
@@ -147,13 +153,25 @@ docker system prune -f                                    # почистить �
 
 ---
 
-## 13. Что дальше — CI/CD (автовыкатка)
-Сейчас деплой ручной (§9). Автоматизация: GitHub Actions на push в `master` заходит на
-сервер по SSH и выполняет `git pull && docker compose -f docker-compose.prod.yml up -d --build`.
-Нужен deploy-ключ + секреты в репозитории (`SSH_HOST`, `SSH_USER`, `SSH_KEY`). CI-часть
-(lint/types/tests) уже есть в `.github/workflows/ci.yml` — CD добавляется отдельным
-workflow. Сначала пройди ручной деплой хотя бы раз — так поймёшь каждый шаг, который
-потом автоматизируешь.
+## 13. CI/CD (автовыкатка) — настроено
+
+Job `deploy` в `.github/workflows/ci.yml`: на push в `master`, после зелёного
+quality-gate, GitHub Actions заходит на VPS по SSH и выполняет
+`git reset --hard origin/master && docker compose -f docker-compose.prod.yml up -d --build`.
+Ручная выкатка (§9) остаётся запасным вариантом.
+
+Как устроен доступ:
+
+- На сервере в `~/.ssh/authorized_keys` юзера `deploy` лежит **публичный** ключ
+  `github-actions-aqua-bot` (отдельная пара, не личный ключ).
+- В секретах репозитория (Settings → Secrets → Actions): `SSH_HOST` (IP),
+  `SSH_USER` (`deploy`), `SSH_KEY` (**приватный** ключ той же пары).
+- Отозвать доступ CI: удалить строку ключа из `authorized_keys` на сервере.
+
+Путь репозитория на сервере: `~/zdorova-voda-telegram-bots` (захардкожен в job).
+Прод-чекаут обновляется через `git reset --hard origin/master` — локальные правки
+кода на сервере будут затёрты (это фича: сервер — точная копия master; `.env` не
+в git, его reset не трогает).
 
 ---
 
