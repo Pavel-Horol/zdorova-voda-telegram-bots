@@ -13,6 +13,19 @@ export interface OrderStatusChangedEvent {
 }
 
 /**
+ * Name of the order-created event: a client placed an order (status CREATED). Emitted
+ * from OrdersService right after the dispatcher was notified. Nobody listens in the
+ * normal build — it exists so side channels can react to a new order WITHOUT
+ * OrdersService knowing about them (CLAUDE.md rule 10). The demo stand's simulated
+ * dispatcher is such a listener: it schedules the automatic accept.
+ */
+export const ORDER_CREATED = 'order.created';
+
+export interface OrderCreatedEvent {
+  order: Order;
+}
+
+/**
  * Name of the order-edited event: the dispatcher changed the order's content
  * (bottle quantity / delivery address / comment) without a status change. Emitted
  * from OrdersService on a dispatcher edit; the client bot listens and notifies the

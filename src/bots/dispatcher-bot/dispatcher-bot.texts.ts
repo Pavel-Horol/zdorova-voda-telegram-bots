@@ -44,6 +44,16 @@ export const dispatcherWelcome =
   'Нові замовлення надходять сюди автоматично — обробляйте кнопками під ними.\n' +
   'Меню нижче: 📋 Активні, 💰 Ціни, 📊 Статистика, 🔎 Клієнт, 📞 Контакти.';
 
+/**
+ * Demo stand (DEMO_MODE): prepended to the welcome. The dispatcher bot of the stand is
+ * open to anyone — a buyer opens it to look at the operator side — so it must say up
+ * front that the queue is shared and that nothing here is a real order.
+ */
+export const demoDispatcherBanner =
+  '🧪 Демо-стенд. Замовлення несправжні, і ви бачите чергу всіх, ' +
+  'хто зараз дивиться демо.\n' +
+  'Ціни можна міняти — вони періодично повертаються до типових.\n';
+
 /** Header of the active orders list (/orders). */
 export function activeOrdersHeader(count: number): string {
   return `📋 Активні замовлення: ${count}`;

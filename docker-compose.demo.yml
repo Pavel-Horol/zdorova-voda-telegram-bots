@@ -1,0 +1,58 @@
+# ДЕМО-стенд: бот + Postgres, полностью отдельно от прода.
+# Запуск:  npm run demo:up
+#     или: docker compose -f docker-compose.demo.yml up -d --build
+#
+# Здесь СОЗНАТЕЛЬНО нет ни одной ${ПЕРЕМЕННОЙ}: интерполяцию compose берёт из файла
+# `.env` (или из --env-file), а не из `env_file:` ниже. Забыл флаг — переменные молча
+# станут пустыми строками и контейнер получит postgresql://:@db:5432. Поэтому все
+# значения приходят внутрь контейнера через env_file, а контейнерный адрес БД —
+# отдельной переменной DOCKER_DATABASE_URL (её подставляет docker/entrypoint.sh).
+#
+# Изоляция от прода:
+#   name: aqua-demo   — свой compose-проект → свои контейнеры и свой volume
+#                       (aqua-demo_pgdata), даже если запускать из той же папки;
+#   .env.demo         — свои токены ботов и свой пароль БД;
+#   порт 5433         — демо-БД не конфликтует с локальной базой на 5432.
+name: aqua-demo
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile.prod
+    image: aqua-bot-demo:latest
+    restart: unless-stopped
+    # Отсюда приезжают и токены, и POSTGRES_*, и DOCKER_DATABASE_URL.
+    env_file: .env.demo
+    environment:
+      # Демо собирается прод-образом (тот же Dockerfile.prod, миграции накатывает
+      # entrypoint). NODE_ENV=production здесь — про сборку и рантайм, а не про режим:
+      # что это демо, решает DEMO_MODE (см. src/config/demo.ts).
+      NODE_ENV: production
+      DEMO_MODE: "true"
+    depends_on:
+      db:
+        condition: service_healthy
+    # ports не публикуем: long polling требует только исходящих соединений к Telegram.
+
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    # POSTGRES_USER / POSTGRES_PASSWORD / POSTGRES_DB образ читает из окружения —
+    # env_file даёт их напрямую, без интерполяции.
+    env_file: .env.demo
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    # Только localhost ноутбука/сервера и порт 5433 — чтобы не конфликтовать с
+    # основной базой на 5432 и не светить демо-БД в интернет.
+    ports:
+      - "127.0.0.1:5433:5432"
+    healthcheck:
+      # $$ — экранирование для compose: переменную разворачивает шелл ВНУТРИ контейнера.
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  pgdata:

@@ -12,9 +12,11 @@ import {
   ORDER_STATUS_CHANGED,
   ORDER_EDITED,
   ORDER_DELIVERY_NOTE,
+  ORDER_CREATED,
   type OrderStatusChangedEvent,
   type OrderEditedEvent,
   type OrderDeliveryNoteEvent,
+  type OrderCreatedEvent,
 } from './order-events';
 import { OrderStatus, OrderKind } from '../../../generated/prisma/enums';
 import type { Order, Client, Address } from '../../../generated/prisma/client';
@@ -350,6 +352,7 @@ export class OrdersService {
     }
 
     await this.dispatcher.notifyNewOrder(order, client, address);
+    this.emitCreated(order);
 
     return order;
   }
@@ -717,6 +720,17 @@ export class OrdersService {
       where: { id, status: OrderStatus.CANCELLED },
       data: { status: OrderStatus.CREATED, cancelReason: null },
     });
+  }
+
+  /**
+   * Notifies subscribers that a new order was placed. The delivery of the order to the
+   * dispatcher is NOT this event's job (that is OrderDispatcher) — this is the hook for
+   * side channels that must react without OrdersService knowing them (the demo stand's
+   * simulated dispatcher). Fire-and-forget, like the other order events.
+   */
+  private emitCreated(order: Order): void {
+    const payload: OrderCreatedEvent = { order };
+    this.events.emit(ORDER_CREATED, payload);
   }
 
   /**

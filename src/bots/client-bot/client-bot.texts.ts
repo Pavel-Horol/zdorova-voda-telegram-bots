@@ -56,6 +56,41 @@ export const texts = {
     '💵 Оплата готівкою водієві\n\n' +
     'Натисніть «Розпочати», щоб оформити перше замовлення.',
 
+  /**
+   * Demo stand (DEMO_MODE) — profile texts used INSTEAD of the ones above, so a buyer
+   * who opens the bot from a link knows what it is before pressing anything.
+   */
+  demoBotShortDescription:
+    '🧪 Демо бота доставки води «Здорова Вода». Замовлення несправжні.',
+
+  demoBotDescription:
+    '🧪 Це демонстраційна версія бота «Здорова Вода».\n\n' +
+    'Тут можна пройти шлях клієнта повністю: обрати воду, залишити адресу, ' +
+    'оформити замовлення й отримати сповіщення про його статус.\n\n' +
+    'Замовлення несправжні — воду ніхто не привезе, номер телефону не збираємо. ' +
+    'Диспетчер відповідає автоматично.\n\n' +
+    'Натисніть «Розпочати». Команда /reset очистить дані й поверне вас на початок.',
+
+  /**
+   * Demo banner — shown ONCE, on the visitor's first screen (UX.md §4 A7: no wall of
+   * text, and A10: no shouting on every screen). Says plainly that nothing is real,
+   * that we ask for no phone, and how to start over — the three things a buyer wonders.
+   */
+  demoBanner:
+    '🧪 Демо-версія. Замовлення несправжні — воду ніхто не привезе, ' +
+    'номер телефону не запитуємо.\n' +
+    'Диспетчер відповідає автоматично. Команда /reset — почати спочатку.',
+
+  /** ORDER_DONE in the demo: explains what will happen next instead of promising water. */
+  demoOrderDone:
+    'Замовлення прийнято ✅\n\n' +
+    '🧪 За кілька секунд диспетчер підтвердить його, а згодом позначить доставленим — ' +
+    'ви отримаєте ті самі сповіщення, що й справжній клієнт.\n' +
+    'Щоб пройти шлях наново — /reset.',
+
+  /** Confirmation of /reset (demo only) — and the flow immediately starts over. */
+  demoReset: 'Демо очищено ♻️ Починаємо з чистого аркуша.',
+
   /** AWAIT_CONTACT (SPEC §6) — greeting for a brand-new user after /start. */
   awaitContact:
     'Вітаємо у «Здорова Вода»! 💧 Доставляємо питну воду (бутлі 19 л) ' +
@@ -305,3 +340,13 @@ export const texts = {
   foreignContact:
     'Потрібен саме ваш номер. Натисніть кнопку «Поділитися номером» нижче 🙏',
 } as const;
+
+/**
+ * Telegram "/" menu of the client bot ON THE DEMO STAND only. The live bot publishes no
+ * command list on purpose — clients navigate by the reply menu (UX.md §4 A14) — but a
+ * demo visitor needs a discoverable way back to the start.
+ */
+export const demoClientCommands = [
+  { command: 'start', description: '▶️ Почати' },
+  { command: 'reset', description: '♻️ Очистити демо і почати спочатку' },
+];

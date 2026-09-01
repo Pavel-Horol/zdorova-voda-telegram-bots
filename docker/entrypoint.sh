@@ -3,6 +3,16 @@
 # Порядок важен: сначала приводим БД к актуальной схеме, потом стартуем процесс.
 set -e
 
+# Внутри docker-сети хост БД — имя сервиса (`db`), а на хосте — localhost:порт. Один и
+# тот же .env читают оба, поэтому контейнерный адрес приезжает отдельной переменной и
+# подменяет DATABASE_URL здесь, а не через ${...} в compose: интерполяция молча даёт
+# пустую строку, если compose запустили без --env-file (получаем postgresql://:@db:5432).
+# Прод DOCKER_DATABASE_URL не задаёт — для него эта ветка не срабатывает.
+if [ -n "$DOCKER_DATABASE_URL" ]; then
+  DATABASE_URL="$DOCKER_DATABASE_URL"
+  export DATABASE_URL
+fi
+
 echo "→ prisma migrate deploy (применяю миграции к БД)..."
 npx prisma migrate deploy
 

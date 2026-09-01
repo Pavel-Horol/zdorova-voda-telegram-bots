@@ -28,7 +28,8 @@ import {
 } from '../../modules/orders/order-events';
 import type { Address, Client, Order } from '../../../generated/prisma/client';
 import { OrderStatus } from '../../../generated/prisma/enums';
-import { texts } from './client-bot.texts';
+import { demoClientCommands, texts } from './client-bot.texts';
+import { demoPhone, isDemoMode } from '../../config/demo';
 import {
   assertNever,
   parseEditField,
@@ -298,6 +299,12 @@ const ownPumpKeyboard = new InlineKeyboard()
 export class ClientBotService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(ClientBotService.name);
   private bot?: Bot<BotContext>;
+  /**
+   * Demo stand: no phone is asked (a fake one is derived from the Telegram id), the
+   * first screen carries a banner and `/reset` wipes the visitor. Read once — the flag
+   * cannot change while the process runs.
+   */
+  private readonly demo = isDemoMode(process.env);
 
   constructor(
     private readonly config: ConfigService,
@@ -328,6 +335,16 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
     // a Telegram hiccup here must not prevent the bot from starting.
     void this.syncBotProfile(bot);
 
+    // "/" menu — demo only (the live bot is navigated by the reply menu): a visitor
+    // must be able to find /reset without being told. Independent call, don't block.
+    if (this.demo) {
+      void bot.api
+        .setMyCommands(demoClientCommands)
+        .catch((err: Error) =>
+          this.logger.warn(`setMyCommands failed: ${err.message}`),
+        );
+    }
+
     // start() resolves only when the bot stops — do NOT await, or init would hang.
     void bot.start({
       onStart: (me) =>
@@ -352,12 +369,20 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
         bot.api.getMyDescription(),
         bot.api.getMyShortDescription(),
       ]);
-      if (description !== texts.botDescription) {
-        await bot.api.setMyDescription(texts.botDescription);
+      // On the demo stand the profile says so — that is the earliest possible place
+      // to be honest about it (visible in an empty chat, before /start).
+      const wantDescription = this.demo
+        ? texts.demoBotDescription
+        : texts.botDescription;
+      const wantShort = this.demo
+        ? texts.demoBotShortDescription
+        : texts.botShortDescription;
+      if (description !== wantDescription) {
+        await bot.api.setMyDescription(wantDescription);
         this.logger.log('client-bot description updated');
       }
-      if (short_description !== texts.botShortDescription) {
-        await bot.api.setMyShortDescription(texts.botShortDescription);
+      if (short_description !== wantShort) {
+        await bot.api.setMyShortDescription(wantShort);
         this.logger.log('client-bot short description updated');
       }
     } catch (e) {
@@ -434,6 +459,10 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
 
   private registerHandlers(bot: Bot<BotContext>): void {
     bot.command('start', (ctx) => this.onStart(ctx));
+    // Demo stand only — deletes the visitor's own data so the onboarding can be
+    // replayed. Registered before message:text (like /start) so it is not swallowed
+    // by the text router, and NEVER registered in the live bot.
+    if (this.demo) bot.command('reset', (ctx) => this.onDemoReset(ctx));
     bot.on('message:contact', (ctx) => this.onContact(ctx));
     bot.callbackQuery(/^ob:(kit|own|other)$/, (ctx) =>
       this.onOnboardingChoice(ctx),
@@ -468,6 +497,12 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
     if (!ctx.from) return;
     const client = await this.clients.findByTelegramId(BigInt(ctx.from.id));
     if (!client) {
+      // Demo: skip the contact request entirely — a visitor must not hand us their
+      // real number to try the bot (and we must not store it).
+      if (this.demo) {
+        await this.startDemoVisitor(ctx);
+        return;
+      }
       this.resetSession(ctx, Step.AwaitContact);
       await this.replyMenu(ctx, texts.awaitContact, contactKeyboard);
       return;
@@ -475,11 +510,54 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
     await this.showMainMenu(ctx, client.name);
   }
 
+  /**
+   * Demo stand: registers the visitor with a fake phone derived from their Telegram id
+   * (stable, unique — Client.phone is `@unique`) and drops them straight into
+   * onboarding, exactly where a real client lands after sharing a contact.
+   */
+  private async startDemoVisitor(ctx: BotContext): Promise<void> {
+    if (!ctx.from) return;
+    const telegramId = BigInt(ctx.from.id);
+    const name =
+      [ctx.from.first_name, ctx.from.last_name].filter(Boolean).join(' ') ||
+      null;
+    const client = await this.registerClient(
+      telegramId,
+      demoPhone(telegramId),
+      name,
+    );
+    this.resetSession(ctx, Step.MainMenu);
+    if (await this.needsOnboarding(client)) {
+      await this.renderOnboarding(ctx);
+      return;
+    }
+    await this.showMainMenu(ctx, client.name);
+  }
+
+  /**
+   * `/reset` (demo only): deletes the visitor's client row — addresses and orders go
+   * by cascade — and starts the walkthrough over. A pending auto-transition timer for
+   * a deleted order simply fails and is swallowed (demo-auto-dispatcher.service).
+   */
+  private async onDemoReset(ctx: BotContext): Promise<void> {
+    if (!ctx.from) return;
+    await this.clients.deleteByTelegramId(BigInt(ctx.from.id));
+    this.resetSession(ctx, Step.MainMenu);
+    await this.replyMenu(ctx, texts.demoReset);
+    await this.onStart(ctx);
+  }
+
   /** Contact received: register the client and show the menu (AWAIT_CONTACT). */
   private async onContact(ctx: BotContext): Promise<void> {
     if (!ctx.from) return;
     const contact = ctx.message?.contact;
     if (!contact) return;
+    // Demo: the stand never shows the "share number" button, but an old keyboard could
+    // still send one. Discard the real number and continue on the fake-phone path.
+    if (this.demo) {
+      await this.onStart(ctx);
+      return;
+    }
     // Accept only the user's own contact (SPEC §9).
     if (contact.user_id !== ctx.from.id) {
       await this.replyMenu(ctx, texts.foreignContact, contactKeyboard);
@@ -1148,7 +1226,12 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
         }
         return;
       case 'order-done':
-        await this.replyMenu(ctx, texts.orderDone);
+        // In the demo, tell them what the simulated dispatcher is about to do instead
+        // of promising a delivery that will never come.
+        await this.replyMenu(
+          ctx,
+          this.demo ? texts.demoOrderDone : texts.orderDone,
+        );
         return;
       default:
         assertNever(intent);
@@ -1165,7 +1248,13 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
 
   private async renderOnboarding(ctx: BotContext): Promise<void> {
     ctx.session.step = Step.Onboarding;
-    await this.replyInline(ctx, texts.onboarding, onboardingKeyboard);
+    // The demo banner rides on the visitor's FIRST screen only — repeating it on every
+    // screen would be noise (UX.md §4 A10); the profile and the order confirmation
+    // carry the same message where it matters.
+    const text = this.demo
+      ? `${texts.demoBanner}\n\n${texts.onboarding}`
+      : texts.onboarding;
+    await this.replyInline(ctx, text, onboardingKeyboard);
   }
 
   /** Own-bottles count — button screen (default). */

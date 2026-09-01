@@ -40,6 +40,8 @@ lerna-debug.log*
 
 # dotenv environment variable files
 .env
+# Демо-стенд: свои токены и пароли, в репозиторий не попадают (шаблон — .env.demo.example)
+.env.demo
 .env.development.local
 .env.test.local
 .env.production.local

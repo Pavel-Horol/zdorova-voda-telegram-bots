@@ -175,6 +175,31 @@ quality-gate, GitHub Actions заходит на VPS по SSH и выполня�
 
 ---
 
+## 14. Демо-стенд рядом с продом (для показа покупателям)
+
+Демо — **второй инстанс на этом же сервере**: тот же образ, но `DEMO_MODE=true`,
+свои токены ботов и своя БД. Прод при этом не трогается.
+
+```bash
+# отдельный каталог, чтобы не путать с прод-чекаутом (его перезаписывает CI)
+git clone <repo> ~/aqua-bot-demo && cd ~/aqua-bot-demo
+cp .env.demo.example .env.demo && nano .env.demo   # ДЕМО-токены, свой пароль БД
+docker compose -f docker-compose.demo.yml up -d --build
+docker compose -f docker-compose.demo.yml logs -f app
+```
+
+Почему это не мешает проду:
+
+- `name: aqua-demo` в compose — свои контейнеры и свой volume (`aqua-demo_pgdata`);
+- свои токены ботов — правило «один токен = один polling-инстанс» (§8) не нарушено;
+- БД слушает `127.0.0.1:5433`, прод — `127.0.0.1:5432`.
+
+Обновление демо: `git pull && docker compose -f docker-compose.demo.yml up -d --build`.
+Автовыкатки демо в CI **нет** — job `deploy` катит только прод из `master`.
+Что именно меняет демо-режим и какие у него ограничения — в `DEMO.md`.
+
+---
+
 ## Заметки по безопасности (по желанию, для харденинга)
 - Включи firewall: `ufw allow OpenSSH && ufw enable` (порт БД наружу не открыт —
   в compose он привязан к `127.0.0.1`).

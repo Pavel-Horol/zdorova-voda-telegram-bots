@@ -54,6 +54,7 @@ import {
   deliveryEtaPreset,
   deliveryEtaPrompt,
   deliveryEtaSent,
+  demoDispatcherBanner,
   dispatcherWelcome,
   driverLine,
   editAddressPrompt,
@@ -98,6 +99,7 @@ import {
   terminalActionOf,
 } from './dispatcher-bot.fsm';
 import { OrderStatus } from '../../../generated/prisma/enums';
+import { isDemoMode } from '../../config/demo';
 
 /** Quantity cap when editing an order — guard against a typo (dispatcher is trusted). */
 const MAX_EDIT_QTY = 100;
@@ -122,6 +124,11 @@ const dispatcherMenuKeyboard = new Keyboard()
 @Injectable()
 export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(DispatcherBotService.name);
+  /**
+   * Demo stand: the chat guard is off (any buyer may look at the operator side) and the
+   * welcome says so. Read once — the flag cannot change while the process runs.
+   */
+  private readonly demo = isDemoMode(process.env);
 
   constructor(
     @Inject(DISPATCHER_BOT) private readonly bot: DispatcherBot | null,
@@ -176,6 +183,13 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
    * the guard admits all — a partial local run stays possible.
    */
   private useChatGuard(bot: DispatcherBot): void {
+    // Demo stand: admit everyone. Seeing the dispatcher side IS the demo — the buyer
+    // has nobody to add them as a dispatcher. Managing the dispatcher list stays with
+    // the super-admin (isSuperAdmin), so the stand's own settings are not open season.
+    if (this.demo) {
+      this.logger.warn('DEMO MODE — dispatcher chat guard disabled (any chat)');
+      return;
+    }
     const adminChatId = superAdminChatId(this.config);
     bot.use(async (ctx, next) => {
       const allowed = await this.dispatchers.allowedChatIds(adminChatId);
@@ -459,7 +473,10 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
 
   /** /start — greeting + persistent reply menu (the dispatcher's entry point). */
   private async onStart(ctx: DispatcherContext): Promise<void> {
-    await ctx.reply(dispatcherWelcome, {
+    const welcome = this.demo
+      ? `${demoDispatcherBanner}\n${dispatcherWelcome}`
+      : dispatcherWelcome;
+    await ctx.reply(welcome, {
       reply_markup: dispatcherMenuKeyboard,
     });
   }

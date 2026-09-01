@@ -110,14 +110,39 @@ export class ClientsService {
     });
   }
 
-  // TEMP self-delete (test only) — remove this method when done.
+  /**
+   * Deletes a client together with everything of theirs (addresses and orders go by
+   * cascade). Used by the demo stand's `/reset`, where a visitor replays onboarding
+   * from scratch — the command exists only when DEMO_MODE is on. Not part of the
+   * client-facing product: real order history must never be deletable this way.
+   * Returns false when there was nothing to delete.
+   */
   async deleteByTelegramId(telegramId: bigint): Promise<boolean> {
     const { count } = await this.prisma.client.deleteMany({
       where: { telegramId },
     });
     return count > 0;
   }
-  // END TEMP
+
+  /**
+   * Demo sweep: deletes stale VISITOR clients — those whose fake phone carries
+   * `phonePrefix` (see config/demo.ts) and who registered before `createdBefore`.
+   * Orders and addresses go by cascade. The prefix is what keeps the seeded showcase
+   * history (a different prefix) alive, so the stand never looks empty. Returns how
+   * many clients were removed.
+   */
+  async deleteDemoVisitors(
+    phonePrefix: string,
+    createdBefore: Date,
+  ): Promise<number> {
+    const { count } = await this.prisma.client.deleteMany({
+      where: {
+        phone: { startsWith: phonePrefix },
+        createdAt: { lt: createdBefore },
+      },
+    });
+    return count;
+  }
 
   async setDefaultAddress(
     clientId: string,
