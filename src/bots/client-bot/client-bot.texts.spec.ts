@@ -285,12 +285,44 @@ describe('client-bot texts', () => {
   // Synced to Telegram at startup — an over-limit text would make the API call
   // fail silently in the fire-and-forget sync, so the limits are pinned here.
   describe('bot profile', () => {
-    it('short description fits the Telegram 120-char limit', () => {
-      expect(texts.botShortDescription.length).toBeLessThanOrEqual(120);
+    it.each([
+      ['live', texts.botShortDescription],
+      ['demo', texts.demoBotShortDescription],
+    ])('%s short description fits the Telegram 120-char limit', (_n, text) => {
+      expect(text.length).toBeLessThanOrEqual(120);
     });
 
-    it('description fits the Telegram 512-char limit', () => {
-      expect(texts.botDescription.length).toBeLessThanOrEqual(512);
+    it.each([
+      ['live', texts.botDescription],
+      ['demo', texts.demoBotDescription],
+    ])('%s description fits the Telegram 512-char limit', (_n, text) => {
+      expect(text.length).toBeLessThanOrEqual(512);
+    });
+  });
+
+  // /help is the one screen a lost client reaches for — it must list the menu and
+  // say plainly that the bot is button-driven (UX §A14), not invite a free chat.
+  describe('help', () => {
+    it('lists every main-menu action', () => {
+      for (const label of [
+        '🚰 Замовити воду',
+        '📋 Мої замовлення',
+        '💰 Ціни',
+        '📍 Моя адреса',
+        '📞 Зв’язатися',
+      ]) {
+        expect(texts.help).toContain(label);
+      }
+    });
+
+    it('states how payment works and that the bot is driven by buttons', () => {
+      expect(texts.help).toContain('готівкою водієві');
+      expect(texts.help).toContain('кнопками');
+    });
+
+    it('demo note points at /reset and denies collecting a phone', () => {
+      expect(texts.demoHelpNote).toContain('/reset');
+      expect(texts.demoHelpNote).toContain('не запитуємо');
     });
   });
 });

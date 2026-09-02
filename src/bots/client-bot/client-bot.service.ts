@@ -459,6 +459,10 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
 
   private registerHandlers(bot: Bot<BotContext>): void {
     bot.command('start', (ctx) => this.onStart(ctx));
+    // Reference message, works in any state. Registered before message:text (like
+    // /start) so the text router never swallows it. The live bot publishes no "/"
+    // menu (clients navigate by the reply menu) — typing /help still works.
+    bot.command('help', (ctx) => this.onHelp(ctx));
     // Demo stand only — deletes the visitor's own data so the onboarding can be
     // replayed. Registered before message:text (like /start) so it is not swallowed
     // by the text router, and NEVER registered in the live bot.
@@ -630,6 +634,17 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
     } else if (ctx.session.step === Step.AwaitOrderNote) {
       await this.onOrderNoteInput(ctx, text);
     }
+  }
+
+  /**
+   * /help — what the bot can do. An AUXILIARY message, not a scenario screen: it sends
+   * no keyboard and deliberately does not clear the active inline one, so a client who
+   * types it mid-order keeps the screen they were on and their progress (UX §A13).
+   * That is why the bare ctx.reply is right here — the ban covers scenario screens
+   * (CLAUDE.md §6), same as the "send it as text" nudge below.
+   */
+  private async onHelp(ctx: BotContext): Promise<void> {
+    await ctx.reply(this.demo ? texts.help + texts.demoHelpNote : texts.help);
   }
 
   /**

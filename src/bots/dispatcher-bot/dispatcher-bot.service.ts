@@ -55,6 +55,11 @@ import {
   deliveryEtaPrompt,
   deliveryEtaSent,
   demoDispatcherBanner,
+  demoDispatcherBotDescription,
+  demoDispatcherBotShortDescription,
+  demoDispatcherHelpNote,
+  dispatcherBotDescription,
+  dispatcherBotShortDescription,
   dispatcherWelcome,
   driverLine,
   editAddressPrompt,
@@ -163,6 +168,10 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
         this.logger.warn(`setMyCommands failed: ${err.message}`),
       );
 
+    // Profile texts (description in the empty chat, "about") — fire-and-forget:
+    // a Telegram hiccup here must not prevent the bot from starting.
+    void this.syncBotProfile(bot);
+
     // start() resolves only on stop — do NOT await, or init would hang.
     void bot.start({
       onStart: (me) =>
@@ -174,6 +183,42 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
 
   async onModuleDestroy(): Promise<void> {
     await this.bot?.stop();
+  }
+
+  /**
+   * Syncs the bot profile with texts.ts: the description shown in the empty chat before
+   * /start and the short "about" line in the profile card. Kept in the repo (versioned,
+   * reviewable) instead of hand-edits in BotFather. Reads the current values first and
+   * writes only on change — Telegram rate-limits these methods, and a routine restart
+   * must not burn that limit. Same contract as the client bot's sync.
+   */
+  private async syncBotProfile(bot: DispatcherBot): Promise<void> {
+    try {
+      const [{ description }, { short_description }] = await Promise.all([
+        bot.api.getMyDescription(),
+        bot.api.getMyShortDescription(),
+      ]);
+      // On the demo stand the profile says so — the earliest possible place to be
+      // honest, visible in an empty chat before the buyer presses anything.
+      const wantDescription = this.demo
+        ? demoDispatcherBotDescription
+        : dispatcherBotDescription;
+      const wantShort = this.demo
+        ? demoDispatcherBotShortDescription
+        : dispatcherBotShortDescription;
+      if (description !== wantDescription) {
+        await bot.api.setMyDescription(wantDescription);
+        this.logger.log('dispatcher-bot description updated');
+      }
+      if (short_description !== wantShort) {
+        await bot.api.setMyShortDescription(wantShort);
+        this.logger.log('dispatcher-bot short description updated');
+      }
+    } catch (e) {
+      this.logger.warn(
+        `dispatcher-bot profile sync failed: ${e instanceof Error ? e.message : String(e)}`,
+      );
+    }
   }
 
   /**
@@ -481,9 +526,11 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
     });
   }
 
-  /** /help — short command reference. */
+  /** /help — short command reference (plus what is fake about it on the demo stand). */
   private async onHelp(ctx: DispatcherContext): Promise<void> {
-    await ctx.reply(dispatcherHelp);
+    await ctx.reply(
+      this.demo ? dispatcherHelp + demoDispatcherHelpNote : dispatcherHelp,
+    );
   }
 
   /**

@@ -336,6 +336,29 @@ export const texts = {
     );
   },
 
+  /**
+   * /help — a short reference of what the bot can do, keyed to the reply menu labels
+   * one-to-one (UX §A9: one vocabulary) and honest that the bot is driven by buttons,
+   * not by free-form chat (§A14). Kept short — no wall of text (§A7).
+   */
+  help:
+    'Що вміє бот 💧\n\n' +
+    '🚰 Замовити воду — оформити доставку бутлів 19 л\n' +
+    '📋 Мої замовлення — статуси; поки замовлення не прийняте, його можна скасувати\n' +
+    '💰 Ціни — актуальний прайс\n' +
+    '📍 Моя адреса — переглянути або змінити адресу доставки\n' +
+    '📞 Зв’язатися — телефони, якщо потрібна жива людина\n\n' +
+    '💵 Оплата — готівкою водієві при доставці.\n' +
+    'Користуйтеся кнопками меню внизу екрана — бот працює кнопками, а не листуванням.',
+
+  /**
+   * Demo stand — appended to {@link help}. Repeats the two things a visitor forgets
+   * between screens (nothing is real, no phone is collected) and where the way back is.
+   */
+  demoHelpNote:
+    '\n\n🧪 Демо: замовлення несправжні, номер телефону не запитуємо. ' +
+    'Команда /reset очистить дані й поверне на початок.',
+
   /** The client shared someone else's contact (edge case SPEC §9). */
   foreignContact:
     'Потрібен саме ваш номер. Натисніть кнопку «Поділитися номером» нижче 🙏',
@@ -348,5 +371,6 @@ export const texts = {
  */
 export const demoClientCommands = [
   { command: 'start', description: '▶️ Почати' },
+  { command: 'help', description: '❓ Що вміє бот' },
   { command: 'reset', description: '♻️ Очистити демо і почати спочатку' },
 ];

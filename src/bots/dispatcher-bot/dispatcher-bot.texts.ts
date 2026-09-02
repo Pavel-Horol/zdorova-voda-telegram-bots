@@ -54,6 +54,41 @@ export const demoDispatcherBanner =
   'хто зараз дивиться демо.\n' +
   'Ціни можна міняти — вони періодично повертаються до типових.\n';
 
+/**
+ * Bot profile: the short "about" line in the profile card (Telegram limit — 120 chars)
+ * and the description shown in the empty chat before /start (limit — 512). Synced at
+ * startup by DispatcherBotService — versioned here and reviewable, instead of hand-edits
+ * in BotFather. Mirrors what the client bot does with its own profile.
+ */
+export const dispatcherBotShortDescription =
+  'Робоче місце диспетчера «Здорова Вода»: замовлення, статуси, ціни, статистика.';
+
+export const dispatcherBotDescription =
+  'Диспетчерський бот «Здорова Вода» 🚰\n\n' +
+  'Замовлення з клієнтського бота надходять сюди автоматично: склад, адреса, сума.\n\n' +
+  '✅ Статус міняється кнопками під замовленням — клієнт одразу отримує сповіщення\n' +
+  '💰 Ціни й телефони підтримки редагуються тут\n' +
+  '📊 Статистика та пошук клієнта за номером\n\n' +
+  'Доступ — лише для диспетчерів.';
+
+/**
+ * Demo stand (DEMO_MODE) — profile texts used INSTEAD of the ones above. The stand's
+ * dispatcher bot is open to anyone, so a buyer who opens the link must understand what
+ * they are looking at BEFORE pressing anything: whose queue this is and why it answers
+ * by itself. Same honesty as {@link demoDispatcherBanner}, one screen earlier.
+ */
+export const demoDispatcherBotShortDescription =
+  '🧪 Демо диспетчерської частини «Здорова Вода». Замовлення несправжні.';
+
+export const demoDispatcherBotDescription =
+  '🧪 Це демо диспетчерського бота «Здорова Вода» — те, що бачить оператор.\n\n' +
+  'Сюди падають замовлення з клієнтського бота: склад, адреса, сума. Статус міняється ' +
+  'кнопками, і клієнт одразу отримує сповіщення. Тут же — ціни, статистика й пошук ' +
+  'клієнта.\n\n' +
+  '⚠️ Демо спільне: ви бачите замовлення інших відвідувачів, а «диспетчер» ще й ' +
+  'відповідає автоматично.\n\n' +
+  'Натисніть «Розпочати».';
+
 /** Header of the active orders list (/orders). */
 export function activeOrdersHeader(count: number): string {
   return `📋 Активні замовлення: ${count}`;
@@ -243,6 +278,15 @@ export const dispatcherHelp =
   '/contacts — телефони підтримки, які бачить клієнт\n' +
   '/dispatchers — керування диспетчерами (лише супер-адмін)\n' +
   '/help — ця довідка';
+
+/**
+ * Demo stand — appended to {@link dispatcherHelp}. The two things that surprise a buyer
+ * poking the operator side: the queue is shared, and orders move on their own.
+ */
+export const demoDispatcherHelpNote =
+  '\n\n🧪 Демо: замовлення несправжні, черга спільна для всіх відвідувачів. ' +
+  'Замовлення приймаються й доставляються автоматично за кілька секунд — ' +
+  'але кнопки працюють, якщо натиснути раніше.';
 
 /**
  * Support phone list for the dispatcher (📞 Контакти). Active numbers are shown to the

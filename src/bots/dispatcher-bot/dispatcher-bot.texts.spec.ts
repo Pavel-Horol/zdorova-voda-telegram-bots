@@ -8,6 +8,10 @@ import type {
 import { OrderKind, OrderStatus } from '../../../generated/prisma/enums';
 import {
   activeOrdersCappedNote,
+  demoDispatcherBotDescription,
+  demoDispatcherBotShortDescription,
+  dispatcherBotDescription,
+  dispatcherBotShortDescription,
   activeOrdersHeader,
   activeOrdersSummary,
   cancelReasonCustomPrompt,
@@ -656,6 +660,30 @@ describe('summary / prompt texts', () => {
       expect(cbs).toContain('ct:tgl:ct9');
       expect(cbs).toContain('ct:del:ct9');
       expect(cbs).toContain('ct:add');
+    });
+  });
+
+  // Synced to Telegram at startup — an over-limit text would make the API call fail
+  // silently in the fire-and-forget sync, so the limits are pinned here. The demo
+  // variants are the ones a buyer actually reads, so they are pinned too.
+  describe('bot profile', () => {
+    it.each([
+      ['live', dispatcherBotShortDescription],
+      ['demo', demoDispatcherBotShortDescription],
+    ])('%s short description fits the Telegram 120-char limit', (_n, text) => {
+      expect(text.length).toBeLessThanOrEqual(120);
+    });
+
+    it.each([
+      ['live', dispatcherBotDescription],
+      ['demo', demoDispatcherBotDescription],
+    ])('%s description fits the Telegram 512-char limit', (_n, text) => {
+      expect(text.length).toBeLessThanOrEqual(512);
+    });
+
+    it('demo profile warns that the queue is shared, before anything is pressed', () => {
+      expect(demoDispatcherBotDescription).toContain('🧪');
+      expect(demoDispatcherBotDescription).toContain('інших відвідувачів');
     });
   });
 });
