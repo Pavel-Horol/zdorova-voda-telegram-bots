@@ -72,4 +72,22 @@ export class DispatchersService {
   remove(id: string): Promise<Dispatcher> {
     return this.prisma.dispatcher.delete({ where: { id } });
   }
+
+  /** How many auto-created rows with this exact label are currently registered. */
+  countAutoAdded(label: string): Promise<number> {
+    return this.prisma.dispatcher.count({ where: { label } });
+  }
+
+  /**
+   * Removes rows that were created automatically (matched by their exact label) and are
+   * older than `createdBefore`. Used by the demo stand to expire a visitor's short
+   * subscription to order cards. Both conditions are required: a dispatcher the
+   * super-admin added by hand carries a different label and must never be swept.
+   */
+  async deleteAutoAdded(label: string, createdBefore: Date): Promise<number> {
+    const { count } = await this.prisma.dispatcher.deleteMany({
+      where: { label, createdAt: { lt: createdBefore } },
+    });
+    return count;
+  }
 }

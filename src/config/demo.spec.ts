@@ -1,6 +1,7 @@
 import {
   DEMO_VISITOR_PHONE_PREFIX,
   demoCleanupIntervalMs,
+  demoOrderFeedIntervalMs,
   demoDelays,
   demoPhone,
   demoTtlHours,
@@ -104,6 +105,28 @@ describe('demoCleanupIntervalMs', () => {
     );
     expect(demoCleanupIntervalMs({ DEMO_CLEANUP_INTERVAL_MIN: '0' })).toBe(
       60 * 60_000,
+    );
+  });
+});
+
+describe('demoOrderFeedIntervalMs', () => {
+  it('defaults to every 3 minutes — movement inside one demo session', () => {
+    expect(demoOrderFeedIntervalMs({})).toBe(3 * 60_000);
+  });
+
+  it('0 turns the feed off (the one value that is not a fallback)', () => {
+    expect(demoOrderFeedIntervalMs({ DEMO_ORDER_INTERVAL_MIN: '0' })).toBe(0);
+  });
+
+  it('reads minutes from env, falling back on garbage and out-of-range', () => {
+    expect(demoOrderFeedIntervalMs({ DEMO_ORDER_INTERVAL_MIN: '15' })).toBe(
+      15 * 60_000,
+    );
+    expect(demoOrderFeedIntervalMs({ DEMO_ORDER_INTERVAL_MIN: '-1' })).toBe(
+      3 * 60_000,
+    );
+    expect(demoOrderFeedIntervalMs({ DEMO_ORDER_INTERVAL_MIN: 'often' })).toBe(
+      3 * 60_000,
     );
   });
 });

@@ -1,5 +1,7 @@
 import {
   BTN_CLIENT,
+  INPUT_MODE_KEYS,
+  clearInputModes,
   BTN_CONTACTS,
   BTN_ORDERS,
   BTN_PRICES,
@@ -17,6 +19,7 @@ import {
   sortActiveQueue,
   summarizeQueue,
   terminalActionOf,
+  type DispatcherInputState,
   type QueueOrder,
 } from './dispatcher-bot.fsm';
 import { OrderKind, OrderStatus } from '../../../generated/prisma/enums';
@@ -497,5 +500,45 @@ describe('phoneSearchToken', () => {
     expect(phoneSearchToken('1234')).toBeNull();
     expect(phoneSearchToken('абв')).toBeNull();
     expect(phoneSearchToken('')).toBeNull();
+  });
+});
+
+describe('clearInputModes', () => {
+  /** Every mode set at once — the state that must not survive navigating away. */
+  const allModes = (): DispatcherInputState => ({
+    editingOrder: { id: 'o1', field: 'qty' },
+    editingClaimOrderId: 'o2',
+    geoTaggingOrderId: 'o3',
+    deliveryNoteOrderId: 'o4',
+    cancellingOrderId: 'o5',
+    lookupClient: true,
+    lookupOrder: true,
+    addingContact: true,
+    addingDispatcher: true,
+    editingPriceField: 'price1',
+  });
+
+  it('covers every field of the input state (nothing is left behind)', () => {
+    expect([...INPUT_MODE_KEYS].sort()).toEqual(Object.keys(allModes()).sort());
+  });
+
+  it('drops every pending mode', () => {
+    const state = allModes();
+    clearInputModes(state);
+    for (const key of INPUT_MODE_KEYS) expect(state[key]).toBeUndefined();
+  });
+
+  /**
+   * The bug this guards: "🔎 Клієнт" (awaiting a phone) then "📋 Активні" — without
+   * clearing, the next unrelated text was still routed to the client lookup ("Замало
+   * цифр…"). After clearing, plain text is ignored.
+   */
+  it('after clearing, unrelated text is ignored instead of answering a stale prompt', () => {
+    const state: DispatcherInputState = { lookupClient: true };
+    expect(routeDispatcherText('привіт', state)).toEqual({
+      kind: 'lookup-client',
+    });
+    clearInputModes(state);
+    expect(routeDispatcherText('привіт', state)).toEqual({ kind: 'ignore' });
   });
 });

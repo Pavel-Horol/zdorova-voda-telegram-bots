@@ -407,7 +407,7 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
     // (DB, blocked bot) here, otherwise it becomes an unhandled rejection.
     try {
       const client = await this.clients.getById(event.order.clientId);
-      if (!client) return;
+      if (!client || !this.reachable(client)) return;
       await this.bot.api.sendMessage(String(client.telegramId), text);
     } catch (err) {
       this.logger.warn(
@@ -427,7 +427,7 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
     const text = texts.orderEdited(event.order);
     try {
       const client = await this.clients.getById(event.order.clientId);
-      if (!client) return;
+      if (!client || !this.reachable(client)) return;
       await this.bot.api.sendMessage(String(client.telegramId), text);
     } catch (err) {
       this.logger.warn(
@@ -448,13 +448,23 @@ export class ClientBotService implements OnModuleInit, OnModuleDestroy {
     if (!text) return;
     try {
       const client = await this.clients.getById(event.order.clientId);
-      if (!client) return;
+      if (!client || !this.reachable(client)) return;
       await this.bot.api.sendMessage(String(client.telegramId), text);
     } catch (err) {
       this.logger.warn(
         `failed to notify client about delivery note for order ${event.order.id}: ${(err as Error).message}`,
       );
     }
+  }
+
+  /**
+   * Whether this client can be messaged at all. A Telegram id is always positive, so a
+   * non-positive one belongs to a synthetic row (the demo stand seeds its showcase
+   * clients with negative ids) — sending there would only produce a "chat not found"
+   * for every status change of theirs and drown the log in noise.
+   */
+  private reachable(client: Client): boolean {
+    return client.telegramId > 0n;
   }
 
   private registerHandlers(bot: Bot<BotContext>): void {

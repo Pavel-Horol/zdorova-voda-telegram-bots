@@ -91,6 +91,7 @@ import {
   BTN_PRICES,
   BTN_STATS,
   type OrderEditField,
+  clearInputModes,
   formatChatTitle,
   normalizeOrderIdArg,
   parseDispatcherInput,
@@ -104,7 +105,7 @@ import {
   terminalActionOf,
 } from './dispatcher-bot.fsm';
 import { OrderStatus } from '../../../generated/prisma/enums';
-import { isDemoMode } from '../../config/demo';
+import { DEMO_VISITOR_DISPATCHER_LABEL, isDemoMode } from '../../config/demo';
 
 /** Quantity cap when editing an order — guard against a typo (dispatcher is trusted). */
 const MAX_EDIT_QTY = 100;
@@ -435,15 +436,7 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
     await ctx.answerCallbackQuery();
     const id = ctx.match?.[1];
     if (!id) return;
-    ctx.session.editingPriceField = undefined; // input modes are mutually exclusive
-    ctx.session.editingOrder = undefined;
-    ctx.session.editingClaimOrderId = undefined;
-    ctx.session.geoTaggingOrderId = undefined;
-    ctx.session.deliveryNoteOrderId = undefined;
-    ctx.session.lookupClient = undefined;
-    ctx.session.lookupOrder = undefined;
-    ctx.session.addingContact = undefined;
-    ctx.session.addingDispatcher = undefined;
+    clearInputModes(ctx.session); // modes are mutually exclusive
     ctx.session.cancellingOrderId = id;
     await ctx.editMessageText(cancelReasonCustomPrompt(id));
   }
@@ -518,6 +511,8 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
 
   /** /start — greeting + persistent reply menu (the dispatcher's entry point). */
   private async onStart(ctx: DispatcherContext): Promise<void> {
+    clearInputModes(ctx.session); // back to square one — drop any pending prompt
+    if (this.demo) await this.subscribeDemoVisitor(ctx);
     const welcome = this.demo
       ? `${demoDispatcherBanner}\n${dispatcherWelcome}`
       : dispatcherWelcome;
@@ -526,8 +521,38 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
     });
   }
 
+  /**
+   * Demo stand only: register the visitor's chat as a dispatcher so order cards are
+   * PUSHED to them. Without it the guard lets them in but the broadcast goes only to
+   * the configured chats — a buyer would place an order and see nothing arrive, which
+   * is the one moment the whole demo exists to show.
+   *
+   * The row carries the demo label and a short lease: DemoOrderFeedService un-registers
+   * idle visitors within minutes, so nobody who walked away keeps getting cards. An
+   * existing dispatcher (the super-admin, or one added by hand) is left alone — we must
+   * not overwrite a real label with the demo one.
+   */
+  private async subscribeDemoVisitor(ctx: DispatcherContext): Promise<void> {
+    const chatId = ctx.chat?.id;
+    if (chatId === undefined) return;
+    try {
+      const allowed = await this.dispatchers.allowedChatIds(
+        superAdminChatId(this.config),
+      );
+      if (allowed.includes(String(chatId))) return;
+      await this.dispatchers.add(String(chatId), DEMO_VISITOR_DISPATCHER_LABEL);
+    } catch (err) {
+      // Best-effort: a visitor who cannot be subscribed still sees the queue via
+      // "📋 Активні" — never block the welcome on it.
+      this.logger.warn(
+        `demo visitor subscribe failed: ${(err as Error).message}`,
+      );
+    }
+  }
+
   /** /help — short command reference (plus what is fake about it on the demo stand). */
   private async onHelp(ctx: DispatcherContext): Promise<void> {
+    clearInputModes(ctx.session); // navigating away cancels a pending prompt
     await ctx.reply(
       this.demo ? dispatcherHelp + demoDispatcherHelpNote : dispatcherHelp,
     );
@@ -542,6 +567,7 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
    * is not flooded. All ordering/age math is pure (dispatcher-bot.fsm), `now` passed in.
    */
   private async onActiveOrders(ctx: DispatcherContext): Promise<void> {
+    clearInputModes(ctx.session); // navigating away cancels a pending prompt
     const orders = await this.orders.listActive();
     if (!orders.length) {
       await ctx.reply(noActiveOrders);
@@ -572,16 +598,7 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
   private async onPrices(ctx: DispatcherContext): Promise<void> {
     // Reset any unfinished editing: re-entering /prices cancels the pending input
     // (otherwise the next number would go into the previous field/order).
-    ctx.session.editingPriceField = undefined;
-    ctx.session.editingOrder = undefined;
-    ctx.session.editingClaimOrderId = undefined;
-    ctx.session.geoTaggingOrderId = undefined;
-    ctx.session.deliveryNoteOrderId = undefined;
-    ctx.session.lookupClient = undefined;
-    ctx.session.lookupOrder = undefined;
-    ctx.session.cancellingOrderId = undefined;
-    ctx.session.addingContact = undefined;
-    ctx.session.addingDispatcher = undefined;
+    clearInputModes(ctx.session);
     const prices = await this.pricingSettings.getCurrent();
     await ctx.reply(pricesMessage(prices), { reply_markup: pricesKeyboard() });
   }
@@ -591,15 +608,7 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
     await ctx.answerCallbackQuery();
     const field = ctx.match?.[1] as EditablePriceField | undefined;
     if (!field) return;
-    ctx.session.editingOrder = undefined; // input modes are mutually exclusive
-    ctx.session.editingClaimOrderId = undefined;
-    ctx.session.geoTaggingOrderId = undefined;
-    ctx.session.deliveryNoteOrderId = undefined;
-    ctx.session.lookupClient = undefined;
-    ctx.session.lookupOrder = undefined;
-    ctx.session.cancellingOrderId = undefined;
-    ctx.session.addingContact = undefined;
-    ctx.session.addingDispatcher = undefined;
+    clearInputModes(ctx.session); // modes are mutually exclusive
     ctx.session.editingPriceField = field;
     await ctx.reply(
       `Введіть нове значення для «${priceFieldLabel(field)}» (ціле число грн):`,
@@ -635,15 +644,7 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
     const field = ctx.match?.[1] as OrderEditField | undefined;
     const id = ctx.match?.[2];
     if (!field || !id) return;
-    ctx.session.editingPriceField = undefined; // input modes are mutually exclusive
-    ctx.session.editingClaimOrderId = undefined;
-    ctx.session.geoTaggingOrderId = undefined;
-    ctx.session.deliveryNoteOrderId = undefined;
-    ctx.session.lookupClient = undefined;
-    ctx.session.lookupOrder = undefined;
-    ctx.session.cancellingOrderId = undefined;
-    ctx.session.addingContact = undefined;
-    ctx.session.addingDispatcher = undefined;
+    clearInputModes(ctx.session); // modes are mutually exclusive
     ctx.session.editingOrder = { id, field };
     const prompt =
       field === 'qty'
@@ -671,15 +672,7 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
     await ctx.answerCallbackQuery();
     const id = ctx.match?.[1];
     if (!id) return;
-    ctx.session.editingPriceField = undefined; // input modes are mutually exclusive
-    ctx.session.editingOrder = undefined;
-    ctx.session.geoTaggingOrderId = undefined;
-    ctx.session.deliveryNoteOrderId = undefined;
-    ctx.session.lookupClient = undefined;
-    ctx.session.lookupOrder = undefined;
-    ctx.session.cancellingOrderId = undefined;
-    ctx.session.addingContact = undefined;
-    ctx.session.addingDispatcher = undefined;
+    clearInputModes(ctx.session); // modes are mutually exclusive
     ctx.session.editingClaimOrderId = id;
     await ctx.reply(editClaimPrompt(id));
   }
@@ -693,15 +686,7 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
     await ctx.answerCallbackQuery();
     const id = ctx.match?.[1];
     if (!id) return;
-    ctx.session.editingPriceField = undefined; // input modes are mutually exclusive
-    ctx.session.editingOrder = undefined;
-    ctx.session.editingClaimOrderId = undefined;
-    ctx.session.deliveryNoteOrderId = undefined;
-    ctx.session.lookupClient = undefined;
-    ctx.session.lookupOrder = undefined;
-    ctx.session.cancellingOrderId = undefined;
-    ctx.session.addingContact = undefined;
-    ctx.session.addingDispatcher = undefined;
+    clearInputModes(ctx.session); // modes are mutually exclusive
     ctx.session.geoTaggingOrderId = id;
     await ctx.reply(geoTagPrompt(id));
   }
@@ -748,15 +733,7 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
     await ctx.answerCallbackQuery();
     const id = ctx.match?.[1];
     if (!id) return;
-    ctx.session.editingPriceField = undefined; // input modes are mutually exclusive
-    ctx.session.editingOrder = undefined;
-    ctx.session.editingClaimOrderId = undefined;
-    ctx.session.geoTaggingOrderId = undefined;
-    ctx.session.lookupClient = undefined;
-    ctx.session.lookupOrder = undefined;
-    ctx.session.cancellingOrderId = undefined;
-    ctx.session.addingContact = undefined;
-    ctx.session.addingDispatcher = undefined;
+    clearInputModes(ctx.session); // modes are mutually exclusive
     ctx.session.deliveryNoteOrderId = id;
     await ctx.editMessageText(deliveryEtaCustomPrompt(id));
   }
@@ -773,19 +750,10 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
    * (`/client 0501234567`) searches right away; otherwise waits for the phone as text.
    */
   private async onClientLookupStart(ctx: DispatcherContext): Promise<void> {
-    ctx.session.editingPriceField = undefined; // input modes are mutually exclusive
-    ctx.session.editingOrder = undefined;
-    ctx.session.editingClaimOrderId = undefined;
-    ctx.session.geoTaggingOrderId = undefined;
-    ctx.session.deliveryNoteOrderId = undefined;
-    ctx.session.addingContact = undefined;
-    ctx.session.addingDispatcher = undefined;
+    clearInputModes(ctx.session); // modes are mutually exclusive
     const arg = ctx.match;
     const query = typeof arg === 'string' ? arg.trim() : '';
     if (query) {
-      ctx.session.lookupClient = undefined;
-      ctx.session.lookupOrder = undefined;
-      ctx.session.cancellingOrderId = undefined;
       await this.applyClientLookup(ctx, query);
       return;
     }
@@ -801,9 +769,7 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
     ctx: DispatcherContext,
     rawPhone: string,
   ): Promise<void> {
-    ctx.session.lookupClient = undefined;
-    ctx.session.lookupOrder = undefined;
-    ctx.session.cancellingOrderId = undefined;
+    clearInputModes(ctx.session); // the awaited answer arrived
     const token = phoneSearchToken(rawPhone);
     if (!token) {
       await ctx.reply('Замало цифр. Введіть більше цифр номера.');
@@ -832,21 +798,10 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
    * otherwise waits for the id as text. Mirrors {@link onClientLookupStart}.
    */
   private async onOrderLookupStart(ctx: DispatcherContext): Promise<void> {
-    ctx.session.editingPriceField = undefined; // input modes are mutually exclusive
-    ctx.session.editingOrder = undefined;
-    ctx.session.editingClaimOrderId = undefined;
-    ctx.session.geoTaggingOrderId = undefined;
-    ctx.session.deliveryNoteOrderId = undefined;
-    ctx.session.lookupClient = undefined;
-    ctx.session.lookupOrder = undefined;
-    ctx.session.cancellingOrderId = undefined;
-    ctx.session.addingContact = undefined;
-    ctx.session.addingDispatcher = undefined;
+    clearInputModes(ctx.session);
     const arg = ctx.match;
     const query = typeof arg === 'string' ? arg.trim() : '';
     if (query) {
-      ctx.session.lookupOrder = undefined;
-      ctx.session.cancellingOrderId = undefined;
       await this.applyOrderLookup(ctx, query);
       return;
     }
@@ -863,8 +818,7 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
     ctx: DispatcherContext,
     rawId: string,
   ): Promise<void> {
-    ctx.session.lookupOrder = undefined;
-    ctx.session.cancellingOrderId = undefined;
+    clearInputModes(ctx.session); // the awaited answer arrived
     const prefix = normalizeOrderIdArg(rawId);
     if (!prefix) {
       await ctx.reply(orderNotFound);
@@ -1149,16 +1103,7 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
    * sees on "Зв'язатися". Cancels any pending input (like /prices) and shows the list.
    */
   private async onContacts(ctx: DispatcherContext): Promise<void> {
-    ctx.session.editingPriceField = undefined;
-    ctx.session.editingOrder = undefined;
-    ctx.session.editingClaimOrderId = undefined;
-    ctx.session.geoTaggingOrderId = undefined;
-    ctx.session.deliveryNoteOrderId = undefined;
-    ctx.session.lookupClient = undefined;
-    ctx.session.lookupOrder = undefined;
-    ctx.session.cancellingOrderId = undefined;
-    ctx.session.addingContact = undefined;
-    ctx.session.addingDispatcher = undefined;
+    clearInputModes(ctx.session);
     const contacts = await this.contacts.listAll();
     await ctx.reply(contactsListMessage(contacts), {
       reply_markup: contactsKeyboard(contacts),
@@ -1168,15 +1113,7 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
   /** "➕ Додати номер": wait for the new phone as text (replaces the list buttons). */
   private async onAddContactStart(ctx: DispatcherContext): Promise<void> {
     await ctx.answerCallbackQuery();
-    ctx.session.editingPriceField = undefined; // input modes are mutually exclusive
-    ctx.session.editingOrder = undefined;
-    ctx.session.editingClaimOrderId = undefined;
-    ctx.session.geoTaggingOrderId = undefined;
-    ctx.session.deliveryNoteOrderId = undefined;
-    ctx.session.lookupClient = undefined;
-    ctx.session.lookupOrder = undefined;
-    ctx.session.cancellingOrderId = undefined;
-    ctx.session.addingDispatcher = undefined;
+    clearInputModes(ctx.session); // modes are mutually exclusive
     ctx.session.addingContact = true;
     await ctx.editMessageText(addContactPrompt);
   }
@@ -1266,16 +1203,7 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
       await ctx.reply(dispatchersForbidden);
       return;
     }
-    ctx.session.editingPriceField = undefined;
-    ctx.session.editingOrder = undefined;
-    ctx.session.editingClaimOrderId = undefined;
-    ctx.session.geoTaggingOrderId = undefined;
-    ctx.session.deliveryNoteOrderId = undefined;
-    ctx.session.lookupClient = undefined;
-    ctx.session.lookupOrder = undefined;
-    ctx.session.cancellingOrderId = undefined;
-    ctx.session.addingContact = undefined;
-    ctx.session.addingDispatcher = undefined;
+    clearInputModes(ctx.session);
     const dispatchers = await this.dispatchers.listAll();
     await ctx.reply(dispatchersListMessage(dispatchers), {
       reply_markup: dispatchersKeyboard(dispatchers),
@@ -1286,15 +1214,7 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
   private async onAddDispatcherStart(ctx: DispatcherContext): Promise<void> {
     await ctx.answerCallbackQuery();
     if (!this.isSuperAdmin(ctx)) return;
-    ctx.session.editingPriceField = undefined; // input modes are mutually exclusive
-    ctx.session.editingOrder = undefined;
-    ctx.session.editingClaimOrderId = undefined;
-    ctx.session.geoTaggingOrderId = undefined;
-    ctx.session.deliveryNoteOrderId = undefined;
-    ctx.session.lookupClient = undefined;
-    ctx.session.lookupOrder = undefined;
-    ctx.session.cancellingOrderId = undefined;
-    ctx.session.addingContact = undefined;
+    clearInputModes(ctx.session); // modes are mutually exclusive
     ctx.session.addingDispatcher = true;
     await ctx.editMessageText(addDispatcherPrompt);
   }
@@ -1393,6 +1313,7 @@ export class DispatcherBotService implements OnModuleInit, OnModuleDestroy {
 
   /** /stats — summary for today and this week (SPEC §7). */
   private async onStats(ctx: DispatcherContext): Promise<void> {
+    clearInputModes(ctx.session); // navigating away cancels a pending prompt
     const stats = await this.orders.stats();
     await ctx.reply(statsMessage(stats));
   }

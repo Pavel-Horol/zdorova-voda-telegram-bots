@@ -63,6 +63,46 @@ export interface DispatcherInputState {
 }
 
 /**
+ * Every text-input mode of the session, in one place. `clearInputModes` walks this
+ * list, so adding a mode to {@link DispatcherInputState} without listing it here is a
+ * compile error (see {@link ALL_INPUT_MODES_LISTED}) — a mode that nothing clears is
+ * exactly the bug where "🔎 Клієнт" kept swallowing text after the dispatcher moved on.
+ */
+export const INPUT_MODE_KEYS = [
+  'editingOrder',
+  'editingClaimOrderId',
+  'geoTaggingOrderId',
+  'deliveryNoteOrderId',
+  'cancellingOrderId',
+  'lookupClient',
+  'lookupOrder',
+  'addingContact',
+  'addingDispatcher',
+  'editingPriceField',
+] as const satisfies readonly (keyof DispatcherInputState)[];
+
+/** Compile guard: a mode missing from INPUT_MODE_KEYS makes this assignment red. */
+export type AllInputModesListed =
+  Exclude<
+    keyof DispatcherInputState,
+    (typeof INPUT_MODE_KEYS)[number]
+  > extends never
+    ? true
+    : Exclude<keyof DispatcherInputState, (typeof INPUT_MODE_KEYS)[number]>;
+export const ALL_INPUT_MODES_LISTED: AllInputModesListed = true;
+
+/**
+ * Drops every pending text-input mode. Call it when the dispatcher navigates anywhere
+ * (menu button or command) BEFORE setting the new mode, if any: the modes are mutually
+ * exclusive, and a mode left behind makes the next unrelated message be read as an
+ * answer to a prompt shown screens ago (CLAUDE.md rule 6, in spirit — no invisible
+ * dangling state). Mutates in place: the caller passes `ctx.session`.
+ */
+export function clearInputModes(state: DispatcherInputState): void {
+  for (const key of INPUT_MODE_KEYS) state[key] = undefined;
+}
+
+/**
  * Decides what the text sent by the dispatcher means (SPEC §7). The branching
  * order is preserved exactly: menu buttons take priority (so "💰 Ціни" is not sent
  * as a price value), then the order-editing modes (quantity / claim correction) win

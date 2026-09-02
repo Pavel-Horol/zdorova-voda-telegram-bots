@@ -55,6 +55,8 @@ describe('DispatchersService', () => {
       upsert: jest.Mock;
       update: jest.Mock;
       delete: jest.Mock;
+      deleteMany: jest.Mock;
+      count: jest.Mock;
     };
   };
 
@@ -65,6 +67,8 @@ describe('DispatchersService', () => {
         upsert: jest.fn(),
         update: jest.fn(),
         delete: jest.fn(),
+        deleteMany: jest.fn(),
+        count: jest.fn(),
       },
     };
     service = new DispatchersService(prisma as unknown as PrismaService);
@@ -128,6 +132,23 @@ describe('DispatchersService', () => {
     await expect(service.remove('d1')).resolves.toEqual(row);
     expect(prisma.dispatcher.delete).toHaveBeenCalledWith({
       where: { id: 'd1' },
+    });
+  });
+  it('deleteAutoAdded matches BOTH the label and the age — never a hand-added row', async () => {
+    prisma.dispatcher.deleteMany.mockResolvedValue({ count: 2 });
+    const cutoff = new Date('2026-07-01T12:00:00.000Z');
+    await expect(
+      service.deleteAutoAdded('🧪 демо-відвідувач', cutoff),
+    ).resolves.toBe(2);
+    expect(prisma.dispatcher.deleteMany).toHaveBeenCalledWith({
+      where: { label: '🧪 демо-відвідувач', createdAt: { lt: cutoff } },
+    });
+  });
+  it('countAutoAdded counts only rows with that label', async () => {
+    prisma.dispatcher.count.mockResolvedValue(1);
+    await expect(service.countAutoAdded('🧪 демо-відвідувач')).resolves.toBe(1);
+    expect(prisma.dispatcher.count).toHaveBeenCalledWith({
+      where: { label: '🧪 демо-відвідувач' },
     });
   });
 });

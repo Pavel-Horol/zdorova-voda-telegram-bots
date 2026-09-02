@@ -32,3 +32,32 @@ export function demoTransitionDelayMs(
 ): number {
   return transition === 'accept' ? delays.acceptMs : delays.deliverMs;
 }
+
+/**
+ * Rotation of plausible order sizes for the generated feed. Small and varied — the
+ * queue must read like a working day, not like a load test.
+ */
+const FEED_BOTTLES = [2, 3, 1, 4, 2, 6] as const;
+
+/** One order the feed is about to invent. */
+export interface FeedOrderSpec {
+  clientId: string;
+  bottles: number;
+}
+
+/**
+ * Which showcase client orders next, and how much. Pure and deterministic — `seq` is
+ * the tick counter held by the service, so successive ticks walk the clients and the
+ * sizes at different periods (3 clients × 6 sizes) and the queue does not repeat itself
+ * every other card. No clients yet (showcase still seeding) → null, skip this tick.
+ */
+export function pickFeedOrder(
+  seq: number,
+  clientIds: readonly string[],
+): FeedOrderSpec | null {
+  if (clientIds.length === 0) return null;
+  return {
+    clientId: clientIds[seq % clientIds.length],
+    bottles: FEED_BOTTLES[seq % FEED_BOTTLES.length],
+  };
+}

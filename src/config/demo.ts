@@ -115,6 +115,33 @@ export function demoCleanupIntervalMs(env: EnvLike): number {
 }
 
 /**
+ * How often the stand invents an order from a showcase client (ms), so the dispatcher
+ * side is not a dead chat while a buyer looks at it: cards arrive on their own, the
+ * simulated dispatcher then walks them through the status chain. Ticks only produce an
+ * order while a visitor is subscribed, so the default is short enough to be seen inside
+ * one demo session. `0` turns the feed off entirely — the only value that does, which is
+ * why the lower bound here is 0.
+ */
+export function demoOrderFeedIntervalMs(env: EnvLike): number {
+  return readBoundedInt(env.DEMO_ORDER_INTERVAL_MIN, 3, 0, 24 * 60) * 60_000;
+}
+
+/**
+ * Label stamped on the dispatcher row auto-created for a demo VISITOR when they open
+ * the dispatcher bot. Two jobs: it tells the super-admin in /dispatchers who this chat
+ * is, and it is what the pruning matches — nothing else may be deleted by accident.
+ */
+export const DEMO_VISITOR_DISPATCHER_LABEL = '🧪 демо-відвідувач';
+
+/**
+ * How long such an auto-registered visitor keeps receiving order cards. Deliberately
+ * short and NOT configurable: a demo session lasts minutes, and someone who walked away
+ * must not be pinged by the feed for the rest of the day. They are re-registered the
+ * moment they press /start again.
+ */
+export const DEMO_VISITOR_DISPATCHER_TTL_MS = 30 * 60_000;
+
+/**
  * Parses a non-negative integer from env, falling back to `fallback` when it is
  * missing, not a number, or outside [min, max]. A typo in the demo config must never
  * schedule a timer at 0 ms or at a week.

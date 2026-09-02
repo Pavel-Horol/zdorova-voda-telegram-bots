@@ -181,6 +181,7 @@ SUPPORT_PHONE=+380XXXXXXXXX   # ОБЯЗАТЕЛЕН: резерв для «Св
 DEMO_MODE=true                # включает демо-режим целиком (см. DEMO.md)
 DEMO_ACCEPT_DELAY_SEC=25      # через сколько «диспетчер» сам примет заказ
 DEMO_DELIVER_DELAY_SEC=45     # …и пометит доставленным
+DEMO_ORDER_INTERVAL_MIN=3     # как часто стенд создаёт заказ от витринного клиента, пока его смотрят (0 = выкл)
 DEMO_TTL_HOURS=24             # сколько живут данные посетителя до автоудаления
 DEMO_CLEANUP_INTERVAL_MIN=60  # период чистки
 ```

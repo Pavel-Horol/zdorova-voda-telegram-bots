@@ -1,8 +1,7 @@
 import type { Provider } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Bot, type Context, type SessionFlavor } from 'grammy';
-import type { EditablePriceField } from '../../modules/pricing-settings/pricing-settings.service';
-import type { OrderEditField } from './dispatcher-bot.fsm';
+import type { DispatcherInputState } from './dispatcher-bot.fsm';
 
 /** DI token for the shared dispatcher bot instance. */
 export const DISPATCHER_BOT = Symbol('DISPATCHER_BOT');
@@ -18,30 +17,11 @@ export function superAdminChatId(config: ConfigService): string | undefined {
 }
 
 /**
- * Dispatcher session. Two mutually exclusive text input modes:
- * price editing (/prices) and quantity editing in an order (✏️).
+ * Dispatcher session: nothing but the mutually exclusive text-input modes. The field
+ * list lives in ONE place ({@link DispatcherInputState}) so the text router and
+ * `clearInputModes` always see exactly the modes the handlers can set.
  */
-export interface DispatcherSession {
-  editingPriceField?: EditablePriceField;
-  /** The order + field we are awaiting new input for (✏️ Edit sub-menu flow). */
-  editingOrder?: { id: string; field: OrderEditField };
-  /** id of the OWN_TARA order we are awaiting a corrected declared balance for (step B). */
-  editingClaimOrderId?: string;
-  /** id of the order we are awaiting delivery coordinates for (📍 geo-tagging). */
-  geoTaggingOrderId?: string;
-  /** id of the order we are awaiting a custom delivery-timing message for (🕒). */
-  deliveryNoteOrderId?: string;
-  /** id of the order we are awaiting a custom cancellation reason for (❌ → ✏️ Інша причина). */
-  cancellingOrderId?: string;
-  /** awaiting a phone number to look a client up (🔎 Клієнт). */
-  lookupClient?: boolean;
-  /** awaiting an order id to look an order up (/order). */
-  lookupOrder?: boolean;
-  /** awaiting a new support phone to add to the contact list (📞 Контакти → ➕). */
-  addingContact?: boolean;
-  /** awaiting a chat id (+ optional label) to add a dispatcher (/dispatchers → ➕). */
-  addingDispatcher?: boolean;
-}
+export type DispatcherSession = DispatcherInputState;
 
 export type DispatcherContext = Context & SessionFlavor<DispatcherSession>;
 export type DispatcherBot = Bot<DispatcherContext>;
